@@ -17,14 +17,16 @@ test('getVaultDocId standardizes usernames into safe, case-insensitive document 
 });
 
 test('Canonical vault identity resolves username, primary UID, and legacy UIDs consistently', () => {
-  const byUsername = findCanonicalSeedByInput('Tejasphirake');
+  const byUsername = findCanonicalSeedByInput('tejaspphirake');
+  const byAltSpelling = findCanonicalSeedByInput('Tejasphirake');
   const byLowerUsername = findCanonicalSeedByInput('  tejasphirake ');
   const byPrimaryUid = findCanonicalSeedByInput(PRIMARY_CANONICAL_VAULT_ID);
   const byLegacyUid = findCanonicalSeedByInput(LEGACY_CANONICAL_VAULT_ID);
-  const byLegacyDoc = findCanonicalSeedByInput('u_tejasphirake');
+  const byLegacyDoc = findCanonicalSeedByInput('u_tejaspphirake');
   const byEmailAlias = findCanonicalSeedByInput('shunyavansh@gmail.com');
 
   assert.equal(byUsername?.vaultId, 'd6a19222-fefb-4c0e-b3b4-f7a725488caa');
+  assert.equal(byAltSpelling?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byLowerUsername?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byPrimaryUid?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byLegacyUid?.vaultId, PRIMARY_CANONICAL_VAULT_ID);

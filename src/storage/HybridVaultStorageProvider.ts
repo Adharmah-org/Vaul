@@ -156,6 +156,7 @@ export class HybridVaultStorageProvider implements StorageProvider {
       for (const u of allUsers) {
         const matchesSeed =
           u.username.toLowerCase() === seed.usernameLower ||
+          (seed.aliases?.some((a) => a.toLowerCase() === u.username.toLowerCase()) ?? false) ||
           seed.legacyVaultIds.some((lid) => lid.toLowerCase() === u.id.toLowerCase());
         if (matchesSeed && u.id !== seed.vaultId) {
           await this.migrateLocalUserId(u.id, seed.vaultId, seed.username, seed.roohKeyHash);
@@ -221,6 +222,7 @@ export class HybridVaultStorageProvider implements StorageProvider {
           return (
             u.id.toLowerCase() === seed.vaultId.toLowerCase() ||
             u.username.toLowerCase() === seed.usernameLower ||
+            (seed.aliases?.some((a) => a.toLowerCase() === u.username.toLowerCase()) ?? false) ||
             seed.legacyVaultIds.some((lid) => lid.toLowerCase() === u.id.toLowerCase())
           );
         }
@@ -229,7 +231,17 @@ export class HybridVaultStorageProvider implements StorageProvider {
       .first();
 
     if (localUser) {
-      const localKeyValid = await verifySecret(normalizedKey, localUser.roohKeyHash);
+      let localKeyValid = await verifySecret(normalizedKey, localUser.roohKeyHash);
+      if (!localKeyValid && seed) {
+        const seedKeyValid = await verifySecret(normalizedKey, seed.roohKeyHash);
+        if (seedKeyValid) {
+          localKeyValid = true;
+          await db.users
+            .update(localUser.id, { roohKeyHash: seed.roohKeyHash, updatedAt: Date.now() })
+            .catch(() => {});
+          localUser = { ...localUser, roohKeyHash: seed.roohKeyHash };
+        }
+      }
       if (localKeyValid) {
         if (seed && localUser.id !== seed.vaultId) {
           await this.migrateLocalUserId(localUser.id, seed.vaultId, seed.username, seed.roohKeyHash);

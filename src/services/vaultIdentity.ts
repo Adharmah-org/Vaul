@@ -18,11 +18,11 @@ export interface CanonicalVaultSeed {
 export const CANONICAL_VAULT_SEEDS: CanonicalVaultSeed[] = [
   {
     vaultId: PRIMARY_CANONICAL_VAULT_ID,
-    legacyVaultIds: [LEGACY_CANONICAL_VAULT_ID, 'u_tejasphirake'],
-    username: 'Tejasphirake',
-    usernameLower: 'tejasphirake',
+    legacyVaultIds: [LEGACY_CANONICAL_VAULT_ID, 'u_tejaspphirake', 'u_tejasphirake'],
+    username: 'tejaspphirake',
+    usernameLower: 'tejaspphirake',
     driveAccountEmail: 'shunyavansh@gmail.com',
-    aliases: ['shunyavansh@gmail.com'],
+    aliases: ['tejasphirake', 'shunyavansh@gmail.com'],
     roohKeyHash:
       'pbkdf2$120000$6c75411243cb31420252ba730fe57f7a$f66f0fc37c971738dc336190985f03849438509449f24e3a89bf9172d2b00515',
   },

@@ -339,18 +339,23 @@ export class FirestoreStorageProvider implements StorageProvider {
       candidates.push(cleanInput);
     }
 
-    const aliasLookupKey = seed ? seed.usernameLower : cleanLower;
-    if (aliasLookupKey.length >= 3 && aliasLookupKey.length <= 32 && /^[a-z0-9._-]+$/.test(aliasLookupKey)) {
-      try {
-        const aliasSnap = await getDoc(this.aliasRef(aliasLookupKey));
-        if (aliasSnap.exists()) {
-          const aliasUid = String(aliasSnap.data().vaultId || '');
-          if (aliasUid && !candidates.includes(aliasUid)) {
-            candidates.push(aliasUid);
+    const aliasKeysToCheck = seed
+      ? [seed.usernameLower, ...(seed.aliases || []).map((a) => a.toLowerCase())]
+      : [cleanLower];
+
+    for (const aliasLookupKey of aliasKeysToCheck) {
+      if (aliasLookupKey.length >= 3 && aliasLookupKey.length <= 32 && /^[a-z0-9._-]+$/.test(aliasLookupKey)) {
+        try {
+          const aliasSnap = await getDoc(this.aliasRef(aliasLookupKey));
+          if (aliasSnap.exists()) {
+            const aliasUid = String(aliasSnap.data().vaultId || '');
+            if (aliasUid && !candidates.includes(aliasUid)) {
+              candidates.push(aliasUid);
+            }
           }
+        } catch {
+          // continue to fallbacks
         }
-      } catch {
-        // continue to fallbacks
       }
     }
 
@@ -373,7 +378,7 @@ export class FirestoreStorageProvider implements StorageProvider {
         const snap = await getDoc(this.vaultRef(candidateId));
         if (snap.exists()) {
           const docData = snap.data();
-          const isSeedLegacy = seed && seed.legacyVaultIds.includes(candidateId);
+          const isSeedLegacy = seed && candidateId !== seed.vaultId;
           if (!resolvedUid) {
             resolvedUid = candidateId;
             data = docData;
@@ -409,9 +414,13 @@ export class FirestoreStorageProvider implements StorageProvider {
         });
       }
       await this.ensureVaultAlias(seed.username, seed.vaultId);
+      for (const alias of seed.aliases || []) {
+        await this.ensureVaultAlias(alias, seed.vaultId);
+      }
 
       // Migrate any legacy vault docs into the canonical seed.vaultId
-      for (const legacyId of seed.legacyVaultIds) {
+      for (const legacyId of [...seed.legacyVaultIds, ...legacySourcesToMigrate]) {
+        if (legacyId === seed.vaultId) continue;
         const lSnap = await getDoc(this.vaultRef(legacyId)).catch(() => null);
         if (lSnap && lSnap.exists()) {
           await this.migrateLegacyCloudVault(legacyId, seed.vaultId);
@@ -432,12 +441,30 @@ export class FirestoreStorageProvider implements StorageProvider {
       throw new Error('ACCESS DENIED: Invalid username or Rooh Key.');
     }
 
-    const keyOk = await verifySecret(normalizedKey, String(data.roohKeyHash || ''));
+    let effectiveHash = String(data.roohKeyHash || '');
+    let keyOk = await verifySecret(normalizedKey, effectiveHash);
+    if (!keyOk && seed) {
+      const seedKeyOk = await verifySecret(normalizedKey, seed.roohKeyHash);
+      if (seedKeyOk) {
+        keyOk = true;
+        effectiveHash = seed.roohKeyHash;
+        await updateDoc(this.vaultRef(resolvedUid), {
+          roohKeyHash: seed.roohKeyHash,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+    }
     if (!keyOk) {
       throw new Error('ACCESS DENIED: Invalid Rooh Key.');
     }
 
     await this.ensureVaultAlias(String(data.username), resolvedUid);
+    if (seed) {
+      await this.ensureVaultAlias(seed.username, resolvedUid);
+      for (const alias of seed.aliases || []) {
+        await this.ensureVaultAlias(alias, resolvedUid);
+      }
+    }
     if (legacySourcesToMigrate.length > 0) {
       for (const legacyId of legacySourcesToMigrate) {
         await this.migrateLegacyCloudVault(legacyId, resolvedUid);
@@ -451,7 +478,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     const user: UserRecord = {
       id: resolvedUid,
       username: String(data.username),
-      roohKeyHash: String(data.roohKeyHash),
+      roohKeyHash: effectiveHash,
       createdAt: toMillis(data.createdAt),
       updatedAt: toMillis(data.updatedAt),
     };
@@ -473,11 +500,18 @@ export class FirestoreStorageProvider implements StorageProvider {
   async verifyRoohKey(userId: string, roohKey: string): Promise<boolean> {
     const uid = requireVerifiedUid(userId);
     const path = `vaults/${uid}`;
+    const normalized = normalizeRoohKey(roohKey);
     try {
       const snap = await getDoc(this.vaultRef(uid));
-      if (!snap.exists()) return false;
-      const hash = String(snap.data().roohKeyHash || '');
-      return verifySecret(normalizeRoohKey(roohKey), hash);
+      if (snap.exists()) {
+        const hash = String(snap.data().roohKeyHash || '');
+        if (await verifySecret(normalized, hash)) return true;
+      }
+      const seed = findCanonicalSeedByInput(uid);
+      if (seed) {
+        return verifySecret(normalized, seed.roohKeyHash);
+      }
+      return false;
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, path);
     }
