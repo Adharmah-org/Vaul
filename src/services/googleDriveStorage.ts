@@ -9,14 +9,6 @@ import { auth } from '../firebase';
 
 export const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
 
-const driveProvider = new GoogleAuthProvider();
-for (const scope of DRIVE_SCOPES) {
-  driveProvider.addScope(scope);
-}
-driveProvider.setCustomParameters({
-  prompt: 'select_account',
-});
-
 let isSigningIn = false;
 // Access token is strictly cached in memory only (never localStorage/sessionStorage).
 let cachedAccessToken: string | null = null;
@@ -41,10 +33,11 @@ interface GisGlobal {
       initTokenClient: (config: {
         client_id: string;
         scope: string;
+        hint?: string;
         callback: (response: GisTokenResponse) => void;
         error_callback?: (err: { type?: string; message?: string }) => void;
       }) => {
-        requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+        requestAccessToken: (overrideConfig?: { prompt?: string; hint?: string }) => void;
       };
       revoke?: (token: string, done?: () => void) => void;
     };
@@ -119,7 +112,7 @@ async function fetchDriveAccountProfile(
   }
 }
 
-async function signInViaGisTokenClient(): Promise<DriveConnectionStatus> {
+async function signInViaGisTokenClient(loginHint?: string): Promise<DriveConnectionStatus> {
   const clientId = (firebaseConfig as { oAuthClientId?: string }).oAuthClientId;
   if (!clientId) {
     throw new Error('OAuth Client ID is not configured in firebase-applet-config.json.');
@@ -136,6 +129,7 @@ async function signInViaGisTokenClient(): Promise<DriveConnectionStatus> {
     const client = oauth2.initTokenClient({
       client_id: clientId,
       scope: DRIVE_SCOPES.join(' '),
+      ...(loginHint ? { hint: loginHint } : {}),
       callback: (response) => {
         if (response.error || !response.access_token) {
           reject(
@@ -153,7 +147,10 @@ async function signInViaGisTokenClient(): Promise<DriveConnectionStatus> {
         reject(new Error(err.message || err.type || 'Google Drive popup closed or blocked.'));
       },
     });
-    client.requestAccessToken({ prompt: 'select_account' });
+    client.requestAccessToken({
+      prompt: loginHint ? '' : 'select_account',
+      ...(loginHint ? { hint: loginHint } : {}),
+    });
   });
 
   const profile = await fetchDriveAccountProfile(accessToken);
@@ -198,68 +195,69 @@ export function initDriveAuth(
   });
 }
 
-export async function connectGoogleDrive(): Promise<DriveConnectionStatus> {
+export function getFirebaseAuthorizedDomainsUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`;
+}
+
+export async function connectGoogleDrive(loginHint?: string): Promise<DriveConnectionStatus> {
   isSigningIn = true;
   const clientId = (firebaseConfig as { oAuthClientId?: string }).oAuthClientId;
+  const provider = new GoogleAuthProvider();
+  for (const scope of DRIVE_SCOPES) {
+    provider.addScope(scope);
+  }
+  provider.setCustomParameters(
+    loginHint ? { login_hint: loginHint } : { prompt: 'select_account' }
+  );
 
   try {
-    if (clientId) {
-      try {
-        return await signInViaGisTokenClient();
-      } catch (gisErr: unknown) {
-        const gisMsg = gisErr instanceof Error ? gisErr.message : String(gisErr);
-        const lower = gisMsg.toLowerCase();
-        // If the user closed/denied the Google account chooser, surface immediately without a second popup.
-        if (lower.includes('popup_closed') || lower.includes('access_denied')) {
-          throw new Error('Google Drive sign-in was cancelled before completion.');
-        }
-        // If GIS failed to load or open, fall through to Firebase popup fallback.
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (!credential?.accessToken) {
+        throw new Error('Google Drive authorization did not return an access token.');
+      }
+      cachedAccessToken = credential.accessToken;
+      tokenAuthSource = 'firebase';
+      cachedDriveUser = {
+        email: result.user.email,
+        displayName: result.user.displayName,
+      };
+      return {
+        connected: true,
+        email: cachedDriveUser.email,
+        displayName: cachedDriveUser.displayName,
+      };
+    } catch (fbErr: unknown) {
+      const code =
+        typeof fbErr === 'object' && fbErr !== null && 'code' in fbErr
+          ? String((fbErr as { code?: string }).code || '')
+          : '';
+      const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
+
+      const shouldTryGis =
+        Boolean(clientId) &&
+        (code === 'auth/unauthorized-domain' ||
+          code === 'auth/operation-not-supported-in-this-environment' ||
+          fbMsg.includes('auth/unauthorized-domain'));
+
+      if (shouldTryGis) {
         try {
-          const result = await signInWithPopup(auth, driveProvider);
-          const credential = GoogleAuthProvider.credentialFromResult(result);
-          if (!credential?.accessToken) {
-            throw new Error('Google Drive authorization did not return an access token.');
-          }
-          cachedAccessToken = credential.accessToken;
-          tokenAuthSource = 'firebase';
-          cachedDriveUser = {
-            email: result.user.email,
-            displayName: result.user.displayName,
-          };
-          return {
-            connected: true,
-            email: cachedDriveUser.email,
-            displayName: cachedDriveUser.displayName,
-          };
-        } catch (fbErr: unknown) {
+          return await signInViaGisTokenClient(loginHint);
+        } catch (gisErr: unknown) {
           const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
-          const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
-          if (fbMsg.includes('auth/unauthorized-domain')) {
-            throw new Error(
-              `Google Drive sign-in is not yet authorized on "${host}" (${gisMsg}). Allow popups for this site or add "${host}" in Firebase Console -> Authentication -> Settings -> Authorized domains (Project: ${firebaseConfig.projectId}).`
-            );
-          }
-          throw new Error(`${gisMsg} (${fbMsg})`);
+          const gisMsg = gisErr instanceof Error ? gisErr.message : String(gisErr);
+          throw new Error(
+            `Domain "${host}" is not authorized in Firebase Auth yet (${gisMsg}). Add "${host}" in Firebase Console -> Authentication -> Settings -> Authorized domains (Project: ${firebaseConfig.projectId}).`
+          );
         }
       }
-    }
 
-    const result = await signInWithPopup(auth, driveProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Google Drive authorization did not return an access token.');
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        throw new Error('Google Drive sign-in was cancelled before completion.');
+      }
+      throw fbErr;
     }
-    cachedAccessToken = credential.accessToken;
-    tokenAuthSource = 'firebase';
-    cachedDriveUser = {
-      email: result.user.email,
-      displayName: result.user.displayName,
-    };
-    return {
-      connected: true,
-      email: cachedDriveUser.email,
-      displayName: cachedDriveUser.displayName,
-    };
   } finally {
     isSigningIn = false;
   }

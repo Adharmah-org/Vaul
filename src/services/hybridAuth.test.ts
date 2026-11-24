@@ -22,12 +22,15 @@ test('Canonical vault identity resolves username, primary UID, and legacy UIDs c
   const byPrimaryUid = findCanonicalSeedByInput(PRIMARY_CANONICAL_VAULT_ID);
   const byLegacyUid = findCanonicalSeedByInput(LEGACY_CANONICAL_VAULT_ID);
   const byLegacyDoc = findCanonicalSeedByInput('u_tejasphirake');
+  const byEmailAlias = findCanonicalSeedByInput('shunyavansh@gmail.com');
 
   assert.equal(byUsername?.vaultId, 'd6a19222-fefb-4c0e-b3b4-f7a725488caa');
   assert.equal(byLowerUsername?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byPrimaryUid?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byLegacyUid?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
   assert.equal(byLegacyDoc?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
+  assert.equal(byEmailAlias?.vaultId, PRIMARY_CANONICAL_VAULT_ID);
+  assert.equal(byPrimaryUid?.driveAccountEmail, 'shunyavansh@gmail.com');
   assert.ok(byPrimaryUid?.roohKeyHash.startsWith('pbkdf2$120000$'));
 
   assert.equal(isUuidLike(PRIMARY_CANONICAL_VAULT_ID), true);

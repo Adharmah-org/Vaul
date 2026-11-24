@@ -6,12 +6,14 @@ export interface CanonicalVaultSeed {
   legacyVaultIds: string[];
   username: string;
   usernameLower: string;
+  driveAccountEmail?: string;
+  aliases?: string[];
   roohKeyHash: string;
 }
 
 /**
  * Canonical cross-browser vault identity records using one-way salted PBKDF2-SHA256 digests.
- * No plaintext keys are stored in source code.
+ * No plaintext keys or OAuth tokens are stored in source code.
  */
 export const CANONICAL_VAULT_SEEDS: CanonicalVaultSeed[] = [
   {
@@ -19,6 +21,8 @@ export const CANONICAL_VAULT_SEEDS: CanonicalVaultSeed[] = [
     legacyVaultIds: [LEGACY_CANONICAL_VAULT_ID, 'u_tejasphirake'],
     username: 'Tejasphirake',
     usernameLower: 'tejasphirake',
+    driveAccountEmail: 'shunyavansh@gmail.com',
+    aliases: ['shunyavansh@gmail.com'],
     roohKeyHash:
       'pbkdf2$120000$6c75411243cb31420252ba730fe57f7a$f66f0fc37c971738dc336190985f03849438509449f24e3a89bf9172d2b00515',
   },
@@ -42,7 +46,8 @@ export function findCanonicalSeedByInput(identifier: string): CanonicalVaultSeed
     if (
       seed.usernameLower === clean ||
       seed.vaultId.toLowerCase() === clean ||
-      seed.legacyVaultIds.some((id) => id.toLowerCase() === clean)
+      seed.legacyVaultIds.some((id) => id.toLowerCase() === clean) ||
+      (seed.aliases?.some((alias) => alias.toLowerCase() === clean) ?? false)
     ) {
       return seed;
     }

@@ -6,6 +6,7 @@ import {
   Cloud,
   Copy,
   Download,
+  ExternalLink,
   HardDrive,
   Key,
   Keyboard,
@@ -20,7 +21,12 @@ import {
 } from 'lucide-react';
 import { useVault } from '../context/VaultContext';
 import { formatDateTime } from '../services/fileUtils';
-import { deleteDriveFile, listVaultDriveFiles } from '../services/googleDriveStorage';
+import {
+  deleteDriveFile,
+  getFirebaseAuthorizedDomainsUrl,
+  listVaultDriveFiles,
+} from '../services/googleDriveStorage';
+import { findCanonicalSeedByInput } from '../services/vaultIdentity';
 import { VaultModal } from './Modals';
 
 export const SettingsView: React.FC = () => {
@@ -423,15 +429,48 @@ export const SettingsView: React.FC = () => {
           </div>
 
           <p className="text-[11px] text-[#8A9D98] font-sans-ui leading-relaxed">
-            Connect your Google account inside Settings to back up locally saved files of any size into a dedicated <code className="text-[#E6F1EE]">rooh.clouds/{user.id}</code> folder on Google Drive. Access tokens remain strictly in memory for this session.
+            Connect your Google account{findCanonicalSeedByInput(user.id)?.driveAccountEmail ? (
+              <> (<code className="text-[#00E5FF]">{findCanonicalSeedByInput(user.id)?.driveAccountEmail}</code>)</>
+            ) : null}{' '}
+            inside Settings to back up locally saved files of any size into a dedicated{' '}
+            <code className="text-[#E6F1EE]">rooh.clouds/{user.id}</code> folder on Google Drive. Access tokens remain strictly in memory for this session.
           </p>
 
           {driveError && (
             <div
               role="alert"
-              className="bg-red-500/10 border border-red-500/35 rounded-lg p-3 text-[11px] text-red-300 font-sans-ui leading-relaxed break-words"
+              className="bg-red-500/10 border border-red-500/35 rounded-lg p-3 text-[11px] text-red-200 font-sans-ui leading-relaxed space-y-2 break-words"
             >
-              {driveError}
+              <div>{driveError}</div>
+              {(driveError.includes('Authorized domains') || driveError.includes('unauthorized')) && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const host = window.location.hostname;
+                      await navigator.clipboard.writeText(host).catch(() => {});
+                      addToast({
+                        type: 'info',
+                        title: 'Domain copied',
+                        description: host,
+                      });
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-white/20 bg-white/10 text-[#E6F1EE] hover:bg-white/15"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy {typeof window !== 'undefined' ? window.location.hostname : 'domain'}</span>
+                  </button>
+                  <a
+                    href={getFirebaseAuthorizedDomainsUrl()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#00E5FF]/40 bg-[#00E5FF]/15 text-[#00E5FF] hover:bg-[#00E5FF]/25"
+                  >
+                    <span>Open Firebase Authorized Domains</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
             </div>
           )}
 

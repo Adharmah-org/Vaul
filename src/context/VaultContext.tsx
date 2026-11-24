@@ -7,6 +7,7 @@ import {
   getDriveConnectionStatus,
   initDriveAuth,
 } from '../services/googleDriveStorage';
+import { findCanonicalSeedByInput } from '../services/vaultIdentity';
 import { CloudSyncSummary, HybridVaultStorageProvider } from '../storage/HybridVaultStorageProvider';
 import { StorageProvider } from '../storage/StorageProvider';
 import {
@@ -214,10 +215,11 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const connectDrive = useCallback(async (): Promise<DriveConnectionStatus> => {
-    const status = await connectGoogleDrive();
+    const loginHint = user ? findCanonicalSeedByInput(user.id)?.driveAccountEmail : undefined;
+    const status = await connectGoogleDrive(loginHint);
     setDriveStatus(status);
     return status;
-  }, []);
+  }, [user]);
 
   const disconnectDrive = useCallback(async (): Promise<void> => {
     await disconnectGoogleDrive();
