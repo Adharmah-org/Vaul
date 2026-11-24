@@ -92,6 +92,7 @@ export interface FileRecord {
   encryptionMeta?: FileEncryptionMeta;
   cloudSynced?: boolean;
   chunkCount?: number;
+  driveFileId?: string;
   tags: string[];
   isFavorite: boolean;
   createdAt: number;
@@ -188,6 +189,7 @@ export interface SerializedFileExport {
   extension: string;
   size: number;
   base64Content: string;
+  driveFileId?: string;
   isEncrypted?: boolean;
   encryptionMeta?: FileEncryptionMeta;
   tags: string[];
@@ -200,6 +202,7 @@ export interface VaultArchive {
   schemaVersion: 1;
   app: 'rooh.clouds';
   exportedAt: number;
+  vaultId?: string;
   username: string;
   folders: Omit<FolderRecord, 'userId'>[];
   files: SerializedFileExport[];

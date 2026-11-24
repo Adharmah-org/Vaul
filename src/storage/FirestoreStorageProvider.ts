@@ -18,7 +18,6 @@ import {
   generateUuid,
   hashSecret,
   normalizeRoohKey,
-  validatePasswordStrength,
   validateUsername,
   verifySecret,
 } from '../services/crypto';
@@ -59,9 +58,15 @@ import {
   UploadProgressCallbacks,
 } from './StorageProvider';
 
+import {
+  findCanonicalSeedByInput,
+  getVaultDocId,
+  isUuidLike,
+} from '../services/vaultIdentity';
+
 const CLOUD_SESSION_KEY_PREFIX = 'rooh_cloud_session_';
 const CHUNK_BINARY_BYTES = 360 * 1024; // ~492 KB base64 (< 520,000 char rule cap)
-export const MAX_CLOUD_FILE_BYTES = 8 * 1024 * 1024; // 8 MB max per file (~23 chunks <= 30 cap)
+export const MAX_CLOUD_FILE_BYTES = 10 * 1024 * 1024; // 10 MB max per file (~29 chunks <= 35 cap)
 
 const DEFAULT_PREFERENCES: VaultPreferences = {
   accentMode: 'matrix',
@@ -94,10 +99,7 @@ function clampString(value: string, maxLen: number): string {
 
 const ACTIVE_VAULT_USER_ID_KEY = 'rooh_active_vault_id';
 
-export function getVaultDocId(username: string): string {
-  const clean = username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
-  return `u_${clean}`;
-}
+export { getVaultDocId };
 
 function requireVerifiedUid(expectedUserId?: string): string {
   if (expectedUserId && expectedUserId.trim()) {
@@ -114,6 +116,10 @@ export class FirestoreStorageProvider implements StorageProvider {
 
   private blobCache = new Map<string, Blob>();
 
+  private aliasRef(usernameLower: string) {
+    return doc(db, 'vaultAliases', usernameLower);
+  }
+
   private vaultRef(uid: string) {
     return doc(db, 'vaults', uid);
   }
@@ -124,6 +130,54 @@ export class FirestoreStorageProvider implements StorageProvider {
 
   private subDoc(uid: string, name: string, id: string) {
     return doc(db, 'vaults', uid, name, id);
+  }
+
+  async ensureVaultAlias(username: string, vaultId: string): Promise<void> {
+    const usernameLower = username.trim().toLowerCase();
+    if (usernameLower.length < 3 || usernameLower.length > 32 || !/^[a-z0-9._-]+$/.test(usernameLower)) {
+      return;
+    }
+    const ref = this.aliasRef(usernameLower);
+    try {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          usernameLower,
+          vaultId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else if (snap.data().vaultId !== vaultId) {
+        await updateDoc(ref, {
+          vaultId,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // ignore non-critical alias update race
+    }
+  }
+
+  async resolveVaultUidByUsername(username: string): Promise<string | null> {
+    const clean = username.trim().toLowerCase();
+    const seed = findCanonicalSeedByInput(clean);
+    if (seed) return seed.vaultId;
+
+    if (clean.length >= 3 && clean.length <= 32 && /^[a-z0-9._-]+$/.test(clean)) {
+      try {
+        const aliasSnap = await getDoc(this.aliasRef(clean));
+        if (aliasSnap.exists() && typeof aliasSnap.data().vaultId === 'string') {
+          return aliasSnap.data().vaultId;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+
+    const legacyId = getVaultDocId(username);
+    const legacySnap = await getDoc(this.vaultRef(legacyId)).catch(() => null);
+    if (legacySnap && legacySnap.exists()) return legacyId;
+    return null;
   }
 
   async getCloudVaultStatus(uid: string): Promise<{ exists: boolean; username?: string }> {
@@ -155,18 +209,14 @@ export class FirestoreStorageProvider implements StorageProvider {
       throw new Error(uCheck.error || 'Invalid username.');
     }
 
-    const uid = getVaultDocId(cleanUsername);
-    const path = `vaults/${uid}`;
-    try {
-      const existingSnap = await getDoc(this.vaultRef(uid));
-      if (existingSnap.exists()) {
-        throw new Error('A vault already exists for this username. Switch to Sign In to unlock.');
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('already exists')) throw error;
-      handleFirestoreError(error, OperationType.GET, path);
+    const cleanLower = cleanUsername.toLowerCase();
+    const existingResolved = await this.resolveVaultUidByUsername(cleanUsername);
+    if (existingResolved) {
+      throw new Error('A vault already exists for this username. Switch to Sign In to unlock.');
     }
 
+    const uid = generateUuid();
+    const path = `vaults/${uid}`;
     const roohKey = generateRoohKey();
     const roohKeyHash = await hashSecret(roohKey);
 
@@ -174,12 +224,13 @@ export class FirestoreStorageProvider implements StorageProvider {
       await setDoc(this.vaultRef(uid), {
         ownerUid: uid,
         username: cleanUsername,
-        usernameLower: cleanUsername.toLowerCase(),
+        usernameLower: cleanLower,
         roohKeyHash,
         preferences: DEFAULT_PREFERENCES,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      await this.ensureVaultAlias(cleanUsername, uid);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
     }
@@ -207,8 +258,8 @@ export class FirestoreStorageProvider implements StorageProvider {
     return { user, roohKey, session };
   }
 
-  async syncUserToCloud(user: UserRecord): Promise<void> {
-    const uid = getVaultDocId(user.username);
+  async syncUserToCloud(user: UserRecord, prefs?: VaultPreferences): Promise<void> {
+    const uid = user.id;
     const path = `vaults/${uid}`;
     try {
       const snap = await getDoc(this.vaultRef(uid));
@@ -218,43 +269,179 @@ export class FirestoreStorageProvider implements StorageProvider {
           username: user.username,
           usernameLower: user.username.toLowerCase(),
           roohKeyHash: user.roohKeyHash,
-          preferences: DEFAULT_PREFERENCES,
+          preferences: prefs || DEFAULT_PREFERENCES,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       }
+      await this.ensureVaultAlias(user.username, uid);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   }
 
-  async authenticateUser(username: string, roohKey: string): Promise<LoginResult> {
-    const cleanUsername = username.trim();
-    const cleanUsernameLower = cleanUsername.toLowerCase();
-    const uid = getVaultDocId(cleanUsername);
-    const normalizedKey = normalizeRoohKey(roohKey);
-    const path = `vaults/${uid}`;
-
-    let data: Record<string, unknown> | undefined;
+  /**
+   * Copies all subcollections from a legacy cloud vault ID into the canonical target UID
+   * so previously uploaded items under u_<username> or an older UUID remain accessible.
+   */
+  async migrateLegacyCloudVault(sourceUid: string, targetUid: string): Promise<void> {
+    if (!sourceUid || sourceUid === targetUid) return;
     try {
-      const snap = await getDoc(this.vaultRef(uid));
-      if (!snap.exists()) {
-        throw new Error('ACCESS DENIED: No vault found matching this username. Create a vault or check spelling.');
+      const [srcFolders, srcFiles, srcNotes, srcBookmarks, srcTags] = await Promise.all([
+        this.listFolders(sourceUid).catch(() => []),
+        this.listFiles(sourceUid).catch(() => []),
+        this.listNotes(sourceUid).catch(() => []),
+        this.listBookmarks(sourceUid).catch(() => []),
+        this.listTags(sourceUid).catch(() => []),
+      ]);
+
+      for (const f of srcFolders) {
+        await this.upsertFolder(targetUid, { ...f, userId: targetUid }).catch(() => {});
       }
-      data = snap.data();
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('ACCESS DENIED:')) throw error;
-      handleFirestoreError(error, OperationType.GET, path);
+      for (const n of srcNotes) {
+        await this.upsertNote(targetUid, { ...n, userId: targetUid }).catch(() => {});
+      }
+      for (const b of srcBookmarks) {
+        await this.upsertBookmark(targetUid, { ...b, userId: targetUid }).catch(() => {});
+      }
+      for (const t of srcTags) {
+        await this.upsertTag(targetUid, { ...t, userId: targetUid }).catch(() => {});
+      }
+      for (const file of srcFiles) {
+        let blob: Blob | undefined;
+        if (file.size > 0 && file.cloudSynced && !file.driveFileId) {
+          blob = await this.resolveFileBlob(sourceUid, file).catch(() => undefined);
+        }
+        await this.upsertFileRecord(
+          targetUid,
+          { ...file, userId: targetUid },
+          blob,
+          file.driveFileId
+        ).catch(() => {});
+      }
+    } catch {
+      // non-fatal legacy migration notice
+    }
+  }
+
+  async authenticateUser(usernameOrVaultId: string, roohKey: string): Promise<LoginResult> {
+    const cleanInput = usernameOrVaultId.trim();
+    const cleanLower = cleanInput.toLowerCase();
+    const normalizedKey = normalizeRoohKey(roohKey);
+    const seed = findCanonicalSeedByInput(cleanInput);
+
+    // Build candidate vault IDs to check
+    const candidates: string[] = [];
+    if (seed) {
+      candidates.push(seed.vaultId);
+    }
+    if (isUuidLike(cleanInput) && !candidates.includes(cleanInput)) {
+      candidates.push(cleanInput);
     }
 
-    if (!data || String(data.usernameLower || '') !== cleanUsernameLower) {
+    const aliasLookupKey = seed ? seed.usernameLower : cleanLower;
+    if (aliasLookupKey.length >= 3 && aliasLookupKey.length <= 32 && /^[a-z0-9._-]+$/.test(aliasLookupKey)) {
+      try {
+        const aliasSnap = await getDoc(this.aliasRef(aliasLookupKey));
+        if (aliasSnap.exists()) {
+          const aliasUid = String(aliasSnap.data().vaultId || '');
+          if (aliasUid && !candidates.includes(aliasUid)) {
+            candidates.push(aliasUid);
+          }
+        }
+      } catch {
+        // continue to fallbacks
+      }
+    }
+
+    if (seed) {
+      for (const legacyId of seed.legacyVaultIds) {
+        if (!candidates.includes(legacyId)) candidates.push(legacyId);
+      }
+    } else if (!isUuidLike(cleanInput)) {
+      const legacyUid = getVaultDocId(cleanInput);
+      if (!candidates.includes(legacyUid)) candidates.push(legacyUid);
+    }
+
+    let resolvedUid: string | null = null;
+    let data: Record<string, unknown> | undefined;
+    const legacySourcesToMigrate: string[] = [];
+
+    for (const candidateId of candidates) {
+      const path = `vaults/${candidateId}`;
+      try {
+        const snap = await getDoc(this.vaultRef(candidateId));
+        if (snap.exists()) {
+          const docData = snap.data();
+          const isSeedLegacy = seed && seed.legacyVaultIds.includes(candidateId);
+          if (!resolvedUid) {
+            resolvedUid = candidateId;
+            data = docData;
+          } else if (isSeedLegacy) {
+            legacySourcesToMigrate.push(candidateId);
+          }
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, path);
+      }
+    }
+
+    // If canonical seed exists and its primary vault doc isn't created yet, verify against seed hash & provision it
+    if (seed && (!resolvedUid || resolvedUid !== seed.vaultId)) {
+      const hashToCheck = data?.roohKeyHash ? String(data.roohKeyHash) : seed.roohKeyHash;
+      const keyOk = await verifySecret(normalizedKey, hashToCheck);
+      if (!keyOk) {
+        throw new Error('ACCESS DENIED: Invalid Rooh Key.');
+      }
+
+      const prefs = (data?.preferences as VaultPreferences | undefined) || DEFAULT_PREFERENCES;
+      const targetRef = this.vaultRef(seed.vaultId);
+      const targetSnap = await getDoc(targetRef).catch(() => null);
+      if (!targetSnap || !targetSnap.exists()) {
+        await setDoc(targetRef, {
+          ownerUid: seed.vaultId,
+          username: seed.username,
+          usernameLower: seed.usernameLower,
+          roohKeyHash: hashToCheck,
+          preferences: prefs,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await this.ensureVaultAlias(seed.username, seed.vaultId);
+
+      // Migrate any legacy vault docs into the canonical seed.vaultId
+      for (const legacyId of seed.legacyVaultIds) {
+        const lSnap = await getDoc(this.vaultRef(legacyId)).catch(() => null);
+        if (lSnap && lSnap.exists()) {
+          await this.migrateLegacyCloudVault(legacyId, seed.vaultId);
+        }
+      }
+
+      const freshSnap = await getDoc(targetRef);
+      resolvedUid = seed.vaultId;
+      data = freshSnap.data();
+    }
+
+    if (!resolvedUid || !data) {
+      throw new Error('ACCESS DENIED: No vault found matching this username or Vault ID.');
+    }
+
+    // Verify username match when not logging in by UUID/seed
+    if (!seed && !isUuidLike(cleanInput) && String(data.usernameLower || '') !== cleanLower) {
       throw new Error('ACCESS DENIED: Invalid username or Rooh Key.');
     }
 
     const keyOk = await verifySecret(normalizedKey, String(data.roohKeyHash || ''));
-
     if (!keyOk) {
       throw new Error('ACCESS DENIED: Invalid Rooh Key.');
+    }
+
+    await this.ensureVaultAlias(String(data.username), resolvedUid);
+    if (legacySourcesToMigrate.length > 0) {
+      for (const legacyId of legacySourcesToMigrate) {
+        await this.migrateLegacyCloudVault(legacyId, resolvedUid);
+      }
     }
 
     const prefs = (data.preferences as VaultPreferences | undefined) || DEFAULT_PREFERENCES;
@@ -262,7 +449,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     const now = Date.now();
 
     const user: UserRecord = {
-      id: uid,
+      id: resolvedUid,
       username: String(data.username),
       roohKeyHash: String(data.roohKeyHash),
       createdAt: toMillis(data.createdAt),
@@ -271,14 +458,14 @@ export class FirestoreStorageProvider implements StorageProvider {
 
     const session: SessionRecord = {
       id: generateUuid(),
-      userId: uid,
+      userId: resolvedUid,
       username: user.username,
       token: generateSessionToken(),
       createdAt: now,
       expiresAt: now + durationMs,
     };
-    sessionStorage.setItem(ACTIVE_VAULT_USER_ID_KEY, uid);
-    sessionStorage.setItem(`${CLOUD_SESSION_KEY_PREFIX}${uid}`, JSON.stringify(session));
+    sessionStorage.setItem(ACTIVE_VAULT_USER_ID_KEY, resolvedUid);
+    sessionStorage.setItem(`${CLOUD_SESSION_KEY_PREFIX}${resolvedUid}`, JSON.stringify(session));
 
     return { user, session };
   }
@@ -414,7 +601,15 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
 
     try {
+      const vaultSnap = await getDoc(this.vaultRef(uid));
+      const unameLower = vaultSnap.exists() ? String(vaultSnap.data().usernameLower || '') : '';
       await deleteDoc(this.vaultRef(uid));
+      if (unameLower) {
+        const aliasSnap = await getDoc(this.aliasRef(unameLower)).catch(() => null);
+        if (aliasSnap && aliasSnap.exists() && aliasSnap.data().vaultId === uid) {
+          await deleteDoc(this.aliasRef(unameLower)).catch(() => {});
+        }
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -653,6 +848,260 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
   }
 
+  async upsertFolder(userId: string, folder: FolderRecord): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const ref = this.subDoc(uid, 'folders', folder.id);
+    const cleanName = clampString(sanitizeFileName(folder.name), 180) || 'untitled_folder';
+    const cleanTags = boundTags(folder.tags || []);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        id: folder.id,
+        ownerUid: uid,
+        name: cleanName,
+        parentId: folder.parentId || null,
+        tags: cleanTags,
+        isFavorite: Boolean(folder.isFavorite),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const existing = snap.data();
+      if (
+        existing.name !== cleanName ||
+        (existing.parentId ?? null) !== (folder.parentId ?? null) ||
+        Boolean(existing.isFavorite) !== Boolean(folder.isFavorite)
+      ) {
+        await updateDoc(ref, {
+          name: cleanName,
+          parentId: folder.parentId || null,
+          tags: cleanTags,
+          isFavorite: Boolean(folder.isFavorite),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  }
+
+  async upsertNote(userId: string, note: NoteRecord): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const ref = this.subDoc(uid, 'notes', note.id);
+    const safeTitle = clampString(note.title.trim() || 'Untitled Note', 200);
+    const safeContent = clampString(note.content || '', 250000);
+    const cleanTags = boundTags(note.tags || []);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        id: note.id,
+        ownerUid: uid,
+        title: safeTitle,
+        content: safeContent,
+        folderId: note.folderId || null,
+        tags: cleanTags,
+        isFavorite: Boolean(note.isFavorite),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const existing = snap.data();
+      if (
+        existing.title !== safeTitle ||
+        existing.content !== safeContent ||
+        (existing.folderId ?? null) !== (note.folderId ?? null) ||
+        Boolean(existing.isFavorite) !== Boolean(note.isFavorite)
+      ) {
+        await updateDoc(ref, {
+          title: safeTitle,
+          content: safeContent,
+          folderId: note.folderId || null,
+          tags: cleanTags,
+          isFavorite: Boolean(note.isFavorite),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  }
+
+  async upsertBookmark(userId: string, bookmark: BookmarkRecord): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const check = isValidHttpUrl(bookmark.url);
+    if (!check.valid || !check.normalized) return;
+
+    const ref = this.subDoc(uid, 'bookmarks', bookmark.id);
+    const cleanTags = boundTags(bookmark.tags || []);
+    const cleanUrl = clampString(check.normalized, 2048);
+    const cleanTitle = clampString(bookmark.title.trim() || cleanUrl, 200);
+    const cleanDesc = clampString(bookmark.description.trim(), 1000);
+    const cleanFavicon = clampString(bookmark.faviconUrl || '', 2048);
+
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        id: bookmark.id,
+        ownerUid: uid,
+        url: cleanUrl,
+        title: cleanTitle,
+        description: cleanDesc,
+        faviconUrl: cleanFavicon,
+        tags: cleanTags,
+        isFavorite: Boolean(bookmark.isFavorite),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const existing = snap.data();
+      if (
+        existing.url !== cleanUrl ||
+        existing.title !== cleanTitle ||
+        existing.description !== cleanDesc ||
+        Boolean(existing.isFavorite) !== Boolean(bookmark.isFavorite)
+      ) {
+        await updateDoc(ref, {
+          url: cleanUrl,
+          title: cleanTitle,
+          description: cleanDesc,
+          faviconUrl: cleanFavicon,
+          tags: cleanTags,
+          isFavorite: Boolean(bookmark.isFavorite),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  }
+
+  async upsertTag(userId: string, tag: TagRecord): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const cleanName = clampString(normalizeTagInput(tag.name), 40);
+    if (!cleanName) return;
+    const ref = this.subDoc(uid, 'tags', tag.id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        id: tag.id,
+        ownerUid: uid,
+        name: cleanName,
+        createdAt: serverTimestamp(),
+      });
+    }
+  }
+
+  async upsertFileRecord(
+    userId: string,
+    file: FileRecord,
+    blobOverride?: Blob,
+    driveFileIdOverride?: string
+  ): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const ref = this.subDoc(uid, 'files', file.id);
+    const snap = await getDoc(ref);
+    const existingData = snap.exists() ? snap.data() : null;
+
+    const activeBlob =
+      blobOverride && blobOverride.size > 0
+        ? blobOverride
+        : file.content && file.content.size > 0
+        ? file.content
+        : undefined;
+
+    const cleanName = clampString(sanitizeFileName(file.name), 255) || 'file';
+    const cleanMime = clampString(file.mimeType || 'application/octet-stream', 160);
+    const cleanExt = clampString(file.extension || '', 32);
+    const cleanTags = boundTags(file.tags || []);
+    const driveId = driveFileIdOverride || file.driveFileId || (existingData?.driveFileId as string | undefined) || null;
+
+    const canChunkUpload = Boolean(activeBlob && activeBlob.size <= MAX_CLOUD_FILE_BYTES);
+    const needsChunkUpload =
+      canChunkUpload &&
+      (!existingData || !existingData.cloudSynced || (file.size > 0 && Number(existingData.chunkCount || 0) === 0));
+
+    let chunkStrings: string[] = [];
+    let actualSize = file.size;
+    if (needsChunkUpload && activeBlob) {
+      const payloadBytes = new Uint8Array(await activeBlob.arrayBuffer());
+      actualSize = payloadBytes.byteLength;
+      for (let offset = 0; offset < payloadBytes.byteLength; offset += CHUNK_BINARY_BYTES) {
+        const slice = payloadBytes.subarray(offset, offset + CHUNK_BINARY_BYTES);
+        chunkStrings.push(uint8ArrayToBase64(slice));
+      }
+      this.blobCache.set(file.id, activeBlob);
+    }
+
+    const isCloudSynced = needsChunkUpload
+      ? true
+      : Boolean(existingData?.cloudSynced) || Boolean(driveId) || file.size === 0;
+
+    if (!existingData) {
+      await setDoc(ref, {
+        id: file.id,
+        ownerUid: uid,
+        name: cleanName,
+        folderId: file.folderId || null,
+        mimeType: cleanMime,
+        category: file.category,
+        extension: cleanExt,
+        size: actualSize,
+        chunkCount: chunkStrings.length,
+        cloudSynced: isCloudSynced,
+        driveFileId: driveId,
+        isEncrypted: Boolean(file.isEncrypted),
+        encryptionMeta: file.isEncrypted && file.encryptionMeta ? file.encryptionMeta : null,
+        tags: cleanTags,
+        isFavorite: Boolean(file.isFavorite),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      if (needsChunkUpload) {
+        await updateDoc(ref, {
+          chunkCount: chunkStrings.length,
+          cloudSynced: true,
+          size: actualSize,
+          driveFileId: driveId,
+          updatedAt: serverTimestamp(),
+        });
+      } else if (driveId && existingData.driveFileId !== driveId) {
+        await updateDoc(ref, {
+          driveFileId: driveId,
+          cloudSynced: true,
+          updatedAt: serverTimestamp(),
+        });
+      } else if (
+        existingData.name !== cleanName ||
+        (existingData.folderId ?? null) !== (file.folderId ?? null) ||
+        Boolean(existingData.isFavorite) !== Boolean(file.isFavorite) ||
+        JSON.stringify(existingData.tags || []) !== JSON.stringify(cleanTags)
+      ) {
+        await updateDoc(ref, {
+          name: cleanName,
+          folderId: file.folderId || null,
+          tags: cleanTags,
+          isFavorite: Boolean(file.isFavorite),
+          extension: cleanExt,
+          category: file.category,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    if (needsChunkUpload && chunkStrings.length > 0) {
+      for (let i = 0; i < chunkStrings.length; i++) {
+        const chunkId = `${file.id}_${i}`;
+        const chunkRef = this.subDoc(uid, 'fileChunks', chunkId);
+        const existingChunk = await getDoc(chunkRef);
+        if (!existingChunk.exists()) {
+          await setDoc(chunkRef, {
+            id: chunkId,
+            ownerUid: uid,
+            fileId: file.id,
+            chunkIndex: i,
+            dataBase64: chunkStrings[i],
+            createdAt: serverTimestamp(),
+          });
+        }
+      }
+    }
+  }
+
   // Files
   async listFiles(userId: string): Promise<FileRecord[]> {
     const uid = requireVerifiedUid(userId);
@@ -676,6 +1125,7 @@ export class FirestoreStorageProvider implements StorageProvider {
           size: Number(data.size || 0),
           chunkCount: Number(data.chunkCount || 0),
           cloudSynced: Boolean(data.cloudSynced),
+          driveFileId: typeof data.driveFileId === 'string' ? data.driveFileId : undefined,
           content: cached || new Blob([], { type: mimeType }),
           isEncrypted: Boolean(data.isEncrypted),
           encryptionMeta: (data.encryptionMeta as FileEncryptionMeta | null) || undefined,
@@ -914,17 +1364,22 @@ export class FirestoreStorageProvider implements StorageProvider {
       255
     );
 
+    const updatedAt = Date.now();
+    const extension = clampString(getFileExtension(uniqueName), 32);
+    const category = detectFileCategory(file.mimeType, uniqueName);
     const path = `vaults/${uid}/files/${fileId}`;
     try {
       await updateDoc(this.subDoc(uid, 'files', fileId), {
         name: uniqueName,
+        extension,
+        category,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
 
-    return { ...file, name: uniqueName, updatedAt: Date.now() };
+    return { ...file, name: uniqueName, extension, category, updatedAt };
   }
 
   async moveFile(userId: string, fileId: string, targetFolderId: string | null): Promise<void> {
@@ -1617,6 +2072,7 @@ export class FirestoreStorageProvider implements StorageProvider {
         extension: f.extension,
         size: f.size,
         base64Content,
+        driveFileId: f.driveFileId,
         isEncrypted: f.isEncrypted,
         encryptionMeta: f.encryptionMeta,
         tags: f.tags,
@@ -1630,6 +2086,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       schemaVersion: 1,
       app: 'rooh.clouds',
       exportedAt: Date.now(),
+      vaultId: uid,
       username: status.username || 'cloud_operator',
       folders: folders.map(({ userId: _u, ...rest }) => rest),
       files: serializedFiles,

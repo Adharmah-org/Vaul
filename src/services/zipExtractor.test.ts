@@ -2,14 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import {
+  deriveFolderNameFromZip,
   extractZipArchive,
   inferMimeFromFilename,
   MAX_TOTAL_EXTRACTED_BYTES,
+  MAX_ZIP_BATCH_COUNT,
   sanitizeZipEntryPath,
 } from './zipExtractor';
 
-test('zip extractor enforces 1 GB maximum extracted payload cap', () => {
+test('zip extractor enforces 1 GB maximum extracted payload cap and 15-file batch limit', () => {
   assert.equal(MAX_TOTAL_EXTRACTED_BYTES, 1024 * 1024 * 1024);
+  assert.equal(MAX_ZIP_BATCH_COUNT, 15);
+  assert.equal(deriveFolderNameFromZip('Holiday Photos 2025.ZIP'), 'Holiday Photos 2025');
+  assert.equal(deriveFolderNameFromZip('archive.zip'), 'archive');
 });
 
 test('sanitizeZipEntryPath prevents zip-slip traversal and filters macOS artifacts', () => {

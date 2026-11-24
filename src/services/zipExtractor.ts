@@ -2,8 +2,15 @@ import JSZip from 'jszip';
 import { FileCategory } from '../types/vault';
 import { detectFileCategory, getFileExtension, sanitizeFileName } from './fileUtils';
 
+export const MAX_ZIP_BATCH_COUNT = 15;
 export const MAX_EXTRACTED_FILES = 1000;
 export const MAX_TOTAL_EXTRACTED_BYTES = 1024 * 1024 * 1024; // 1 GB safety cap
+
+export function deriveFolderNameFromZip(zipName: string): string {
+  const withoutExt = zipName.trim().replace(/\.zip$/i, '');
+  const clean = sanitizeFileName(withoutExt).trim();
+  return clean || 'extracted_archive';
+}
 
 const EXT_TO_MIME: Record<string, string> = {
   jpg: 'image/jpeg',

@@ -5,8 +5,6 @@ import {
   Check,
   Copy,
   Download,
-  Eye,
-  EyeOff,
   KeyRound,
   Leaf,
   Lock,
@@ -15,7 +13,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { useVault } from '../context/VaultContext';
-import { validatePasswordStrength, validateUsername } from '../services/crypto';
+import { validateUsername } from '../services/crypto';
 import { VaultModal } from './Modals';
 import { RoohUnlockerView } from './RoohUnlockerView';
 
@@ -124,13 +122,14 @@ export const AuthTerminal: React.FC = () => {
       'ROOH.CLOUDS — ONE-TIME VAULT RECOVERY KEY',
       '==========================================',
       `Username: ${user?.username || username}`,
+      `Vault ID: ${user?.id || 'pending'}`,
       `Rooh Key: ${pendingRoohKey}`,
       `Generated: ${new Date().toISOString()}`,
       '',
       'IMPORTANT:',
-      '- Keep this key safe. It is required alongside your password to unlock this local vault.',
+      '- Keep this key safe. It is required alongside your Username or Vault ID to unlock your vault on any browser.',
       '- rooh.clouds never stores or displays your plaintext Rooh Key after setup.',
-      '- Data in this version is stored locally in this browser IndexedDB.',
+      '- Your encrypted vault syncs across browsers via Cloud Vault and optional Google Drive backup.',
     ].join('\n');
 
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -222,8 +221,8 @@ export const AuthTerminal: React.FC = () => {
             </div>
           </div>
 
-          <div className="my-6 bg-[#030505] border border-[#39FF88]/35 rounded-lg p-5 text-center">
-            <div className="text-[11px] text-[#8A9D98] mb-2 font-sans-ui">
+          <div className="my-6 bg-[#030505] border border-[#39FF88]/35 rounded-lg p-5 text-center space-y-2.5">
+            <div className="text-[11px] text-[#8A9D98] font-sans-ui">
               Unique Cryptographic Rooh Key for <span className="text-[#E6F1EE] font-mono">{user?.username}</span>
             </div>
             <div
@@ -232,6 +231,11 @@ export const AuthTerminal: React.FC = () => {
             >
               {pendingRoohKey}
             </div>
+            {user?.id && (
+              <div className="pt-2 border-t border-white/10 text-[11px] text-[#8A9D98] font-mono break-all select-all">
+                Vault ID: <span className="text-[#00E5FF]">{user.id}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-3 mb-6">
@@ -254,7 +258,7 @@ export const AuthTerminal: React.FC = () => {
           </div>
 
           <div className="bg-[#0F1515] border border-white/10 rounded-lg p-4 mb-6 text-xs text-[#A3B5B0] font-sans-ui leading-relaxed">
-            Once you leave this screen, the complete Rooh Key is discarded from memory and only its salted PBKDF2 hash remains in IndexedDB. It cannot be recovered if lost.
+            Once you leave this screen, the complete Rooh Key is discarded from memory and only its salted PBKDF2 hash remains. Use your Username or Vault ID with this key on any browser to access your vault.
           </div>
 
           <label className="flex items-start gap-3 cursor-pointer mb-6 select-none">
@@ -351,7 +355,7 @@ export const AuthTerminal: React.FC = () => {
             <div className="flex items-start gap-2.5 text-[11px] text-[#8A9D98] font-sans-ui leading-relaxed">
               <ShieldAlert className="w-4 h-4 text-[#00E5FF] shrink-0 mt-0.5" />
               <p>
-                <strong className="text-[#E6F1EE] font-medium">Local Device Auth:</strong> Credentials are hashed with Web Crypto PBKDF2 and stored in browser IndexedDB. This is single-device local authentication, not server-enforced cloud security.
+                <strong className="text-[#E6F1EE] font-medium">Cross-Browser Vault Auth:</strong> Credentials are hashed with Web Crypto PBKDF2 and synced cleanly so your Username or Vault UUID + Rooh Key unlocks your vault from any browser.
               </p>
             </div>
 
@@ -419,7 +423,7 @@ export const AuthTerminal: React.FC = () => {
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label htmlFor="login-username" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
-                  Username
+                  Username or Vault ID
                 </label>
                 <input
                   id="login-username"
@@ -428,7 +432,7 @@ export const AuthTerminal: React.FC = () => {
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="operator_handle"
+                  placeholder="operator_handle or Vault UUID"
                   className="w-full bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3.5 py-2.5 text-sm text-[#E6F1EE] placeholder:text-[#4F615C]"
                 />
               </div>
@@ -458,7 +462,7 @@ export const AuthTerminal: React.FC = () => {
 
               <div className="pt-3 border-t border-white/10 space-y-2 text-center">
                 <p className="text-[11px] text-[#8A9D98] font-sans-ui">
-                  Access from any browser: Enter your Username & Rooh Key to connect your vault anywhere.
+                  Access from any browser: Enter your Username (or Vault UUID) &amp; Rooh Key to connect your vault anywhere.
                 </p>
                 <button
                   type="button"
@@ -501,7 +505,7 @@ export const AuthTerminal: React.FC = () => {
                 disabled={isSubmitting}
                 className="w-full mt-2 py-3 px-4 rounded-lg text-xs font-semibold bg-[#39FF88] text-[#030505] hover:bg-[#52FF99] disabled:opacity-50 transition-colors rooh-glitch-hover"
               >
-                {isSubmitting ? 'Generating Rooh Key...' : 'Create Local Vault'}
+                {isSubmitting ? 'Generating Rooh Key...' : 'Create Vault'}
               </button>
             </form>
           )}

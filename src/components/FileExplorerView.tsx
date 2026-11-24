@@ -3,6 +3,7 @@ import {
   Archive,
   CheckSquare,
   ChevronRight,
+  Cloud,
   Code2,
   Download,
   Edit3,
@@ -13,6 +14,7 @@ import {
   FolderInput,
   FolderPlus,
   Grid,
+  HardDrive,
   Home,
   Image as ImageIcon,
   Leaf,
@@ -31,6 +33,7 @@ import {
   formatTimestamp,
   sortItems,
 } from '../services/fileUtils';
+import { MAX_ZIP_BATCH_COUNT } from '../services/zipExtractor';
 import {
   DockSection,
   FileCategory,
@@ -43,7 +46,7 @@ import {
 import { EncryptedDownloadModal } from './EncryptedDownloadModal';
 import { FilePreviewModal } from './FilePreviewModal';
 import { MoveFolderModal, TagEditorModal, TextPromptModal } from './Modals';
-import { ZipExtractorModal } from './ZipExtractorModal';
+import { ZipExtractorModal, ZipSourceInput } from './ZipExtractorModal';
 
 interface FileExplorerViewProps {
   section: DockSection;
@@ -116,7 +119,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
   const [tagTarget, setTagTarget] = useState<FileRecord | null>(null);
   const [encryptedDownloadTarget, setEncryptedDownloadTarget] = useState<FileRecord | null>(null);
   const [zipModalOpen, setZipModalOpen] = useState(false);
-  const [zipSource, setZipSource] = useState<{ blob: Blob; name: string } | null>(null);
+  const [zipSources, setZipSources] = useState<ZipSourceInput[]>([]);
   const zipInputRef = useRef<HTMLInputElement | null>(null);
 
   // Thumbnail object URLs for plaintext image files
@@ -132,7 +135,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
       if (!f.isEncrypted && f.category === 'image' && f.size < 15 * 1024 * 1024) {
         if (f.content.size > 0) {
           nextUrls[f.id] = URL.createObjectURL(f.content);
-        } else if (f.size > 0 && f.size <= 2 * 1024 * 1024) {
+        } else if (f.size > 0 && f.size <= 5 * 1024 * 1024) {
           pendingCloudImages.push(f);
         }
       }
@@ -348,6 +351,17 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
     }
   };
 
+  const selectedZipFiles = useMemo(
+    () =>
+      files.filter(
+        (f) =>
+          selectedFileIds.has(f.id) &&
+          !f.isEncrypted &&
+          (f.extension === 'zip' || f.mimeType.includes('zip'))
+      ),
+    [files, selectedFileIds]
+  );
+
   const handleOpenStoredZip = async (file: FileRecord) => {
     if (file.isEncrypted) {
       setPreviewFile(file);
@@ -360,12 +374,39 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
     }
     try {
       const blob = await resolveFileBlob(file);
-      setZipSource({ blob, name: file.name });
+      setZipSources([{ blob, name: file.name }]);
       setZipModalOpen(true);
     } catch (err) {
       addToast({
         type: 'error',
         title: 'Unable to open ZIP archive',
+        description: err instanceof Error ? err.message : 'Cloud fetch failed.',
+      });
+    }
+  };
+
+  const handleBulkExtractSelectedZips = async () => {
+    if (selectedZipFiles.length === 0) return;
+    const capped = selectedZipFiles.slice(0, MAX_ZIP_BATCH_COUNT);
+    if (selectedZipFiles.length > MAX_ZIP_BATCH_COUNT) {
+      addToast({
+        type: 'warning',
+        title: `ZIP batch capped at ${MAX_ZIP_BATCH_COUNT}`,
+        description: `Loaded the first ${MAX_ZIP_BATCH_COUNT} selected .zip archives.`,
+      });
+    }
+    try {
+      const sources: ZipSourceInput[] = [];
+      for (const zf of capped) {
+        const blob = await resolveFileBlob(zf);
+        sources.push({ blob, name: zf.name });
+      }
+      setZipSources(sources);
+      setZipModalOpen(true);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Unable to open selected ZIP archives',
         description: err instanceof Error ? err.message : 'Cloud fetch failed.',
       });
     }
@@ -385,16 +426,25 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
       onDrop={handleDrop}
       className="relative min-h-[calc(100vh-8rem)] space-y-5"
     >
-      {/* Hidden ZIP Archive Picker */}
+      {/* Hidden Multi-ZIP Archive Picker (up to 15 .zip files) */}
       <input
         ref={zipInputRef}
         type="file"
+        multiple
         accept=".zip,application/zip,application/x-zip-compressed"
-        aria-label="Choose ZIP archive to extract"
+        aria-label="Choose up to 15 ZIP archives to extract"
         onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            setZipSource({ blob: file, name: file.name });
+          const picked = e.target.files ? Array.from(e.target.files) : [];
+          if (picked.length > 0) {
+            const capped = picked.slice(0, MAX_ZIP_BATCH_COUNT);
+            if (picked.length > MAX_ZIP_BATCH_COUNT) {
+              addToast({
+                type: 'warning',
+                title: `Maximum ${MAX_ZIP_BATCH_COUNT} .zip files per batch`,
+                description: `Selected ${picked.length} archives — loaded the first ${MAX_ZIP_BATCH_COUNT} for folder-named extraction.`,
+              });
+            }
+            setZipSources(capped.map((file) => ({ blob: file, name: file.name })));
             setZipModalOpen(true);
           }
           e.target.value = '';
@@ -612,6 +662,17 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
             {totalSelected} {totalSelected === 1 ? 'item' : 'items'} selected
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {selectedZipFiles.length > 0 && (
+              <button
+                type="button"
+                onClick={handleBulkExtractSelectedZips}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-[#00E5FF]/40 bg-[#00E5FF]/10 text-[#00E5FF] hover:bg-[#00E5FF]/20"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                Extract {Math.min(selectedZipFiles.length, MAX_ZIP_BATCH_COUNT)} ZIP
+                {selectedZipFiles.length === 1 ? '' : 's'}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleBulkFavorite}
@@ -886,13 +947,30 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
 
                       <div className="p-3.5 flex-1 flex flex-col justify-between gap-2.5">
                         <div>
-                          <button
-                            type="button"
-                            onClick={() => setPreviewFile(file)}
-                            className="text-left w-full text-xs font-semibold text-[#E6F1EE] hover:text-[#39FF88] truncate block"
-                          >
-                            {file.name}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewFile(file)}
+                              className="text-left flex-1 min-w-0 text-xs font-semibold text-[#E6F1EE] hover:text-[#39FF88] truncate block"
+                            >
+                              {file.name}
+                            </button>
+                            {file.driveFileId ? (
+                              <span
+                                title="Backed up in Google Drive"
+                                className="text-[#39FF88] shrink-0"
+                              >
+                                <HardDrive className="w-3 h-3" />
+                              </span>
+                            ) : file.cloudSynced ? (
+                              <span
+                                title="Synced to Cloud Vault"
+                                className="text-[#00E5FF] shrink-0"
+                              >
+                                <Cloud className="w-3 h-3" />
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="text-[11px] text-[#8A9D98] mt-1 tabular-nums truncate">
                             {formatBytes(file.size)} · {file.isEncrypted ? 'AES-256-GCM' : file.category} · {formatTimestamp(file.updatedAt)}
                           </div>
@@ -1161,7 +1239,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
         onClose={() => setPreviewFile(null)}
         onSelectFile={(f) => setPreviewFile(f)}
         onExtractZip={(blob, name) => {
-          setZipSource({ blob, name });
+          setZipSources([{ blob, name }]);
           setZipModalOpen(true);
         }}
       />
@@ -1246,12 +1324,12 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
       {/* ZIP Archive Extractor Modal */}
       <ZipExtractorModal
         open={zipModalOpen}
-        zipSource={zipSource}
+        zipSources={zipSources}
         initialFolderId={section === 'all' ? currentFolderId : null}
         onPickZipFile={() => zipInputRef.current?.click()}
         onClose={() => {
           setZipModalOpen(false);
-          setZipSource(null);
+          setZipSources([]);
         }}
         onCompleted={(destFolderId) => {
           onNavigateFolder(destFolderId);

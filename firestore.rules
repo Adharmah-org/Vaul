@@ -21,6 +21,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidUsernameKey(u) {
+      return u is string && u.size() >= 3 && u.size() <= 32 && u.matches('^[a-z0-9._\\-]+$');
+    }
+
     function isValidChunkId(id) {
       return id is string && id.size() >= 1 && id.size() <= 160 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -118,6 +122,16 @@ service cloud.firestore {
     }
 
     // 3. Entity Validation Blueprints
+    function isValidVaultAlias(data, usernameLower) {
+      return data.keys().hasAll(['usernameLower', 'vaultId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['usernameLower', 'vaultId', 'createdAt', 'updatedAt'])
+        && isValidUsernameKey(data.usernameLower)
+        && data.usernameLower == usernameLower
+        && isValidId(data.vaultId)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function isValidVaultProfile(data, vaultUid) {
       return data.keys().hasAll([
           'ownerUid',
@@ -220,6 +234,7 @@ service cloud.firestore {
           'size',
           'chunkCount',
           'cloudSynced',
+          'driveFileId',
           'isEncrypted',
           'encryptionMeta',
           'tags',
@@ -249,8 +264,9 @@ service cloud.firestore {
         && data.size <= 104857600
         && data.chunkCount is number
         && data.chunkCount >= 0
-        && data.chunkCount <= 30
+        && data.chunkCount <= 35
         && data.cloudSynced is bool
+        && (!('driveFileId' in data) || data.driveFileId == null || (data.driveFileId is string && data.driveFileId.size() <= 256))
         && data.isEncrypted is bool
         && isValidEncryptionMeta(data.encryptionMeta, data.isEncrypted)
         && isValidTagList(data.tags)
@@ -283,7 +299,7 @@ service cloud.firestore {
         && isValidId(data.fileId)
         && data.chunkIndex is number
         && data.chunkIndex >= 0
-        && data.chunkIndex <= 30
+        && data.chunkIndex <= 35
         && data.dataBase64 is string
         && data.dataBase64.size() <= 520000
         && data.createdAt is timestamp;
@@ -434,6 +450,28 @@ service cloud.firestore {
     }
 
     // 4. Collection Match Blocks
+    match /vaultAliases/{usernameLower} {
+      allow get: if isValidUsernameKey(usernameLower);
+
+      allow list: if false;
+
+      allow create: if isValidUsernameKey(usernameLower)
+        && isValidVaultAlias(incoming(), usernameLower)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/vaults/$(incoming().vaultId));
+
+      allow update: if isValidUsernameKey(usernameLower)
+        && isValidVaultAlias(incoming(), usernameLower)
+        && incoming().usernameLower == existing().usernameLower
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['vaultId', 'updatedAt'])
+        && exists(/databases/$(database)/documents/vaults/$(incoming().vaultId));
+
+      allow delete: if isValidUsernameKey(usernameLower);
+    }
+
     match /vaults/{vaultUid} {
       allow get: if isValidId(vaultUid);
 
@@ -517,8 +555,9 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
-            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folderId', 'tags', 'isFavorite', 'updatedAt'])
-            || incoming().diff(existing()).affectedKeys().hasOnly(['chunkCount', 'cloudSynced', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folderId', 'tags', 'isFavorite', 'extension', 'category', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['chunkCount', 'cloudSynced', 'size', 'driveFileId', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['driveFileId', 'cloudSynced', 'updatedAt'])
           )
           && isMasterVaultMember(vaultUid);
 

@@ -15,13 +15,38 @@ import {
   X,
 } from 'lucide-react';
 import { useVault } from '../context/VaultContext';
-import { formatBytes } from '../services/fileUtils';
-import { ExtractedZipItem, extractZipArchive } from '../services/zipExtractor';
+import { formatBytes, sanitizeFileName } from '../services/fileUtils';
+import {
+  deriveFolderNameFromZip,
+  ExtractedZipItem,
+  extractZipArchive,
+  MAX_ZIP_BATCH_COUNT,
+} from '../services/zipExtractor';
 import { FolderRecord } from '../types/vault';
+
+export interface ZipSourceInput {
+  blob: Blob;
+  name: string;
+}
+
+interface BatchZipItem extends ExtractedZipItem {
+  globalId: string;
+  archiveIndex: number;
+  zipName: string;
+}
+
+interface ArchiveGroup {
+  archiveIndex: number;
+  zipName: string;
+  targetFolderName: string;
+  items: BatchZipItem[];
+  skippedCount: number;
+  error?: string;
+}
 
 interface ZipExtractorModalProps {
   open: boolean;
-  zipSource: { blob: Blob; name: string } | null;
+  zipSources: ZipSourceInput[];
   initialFolderId: string | null;
   onPickZipFile?: () => void;
   onClose: () => void;
@@ -46,7 +71,7 @@ function buildFolderLabel(folder: FolderRecord, byId: Map<string, FolderRecord>)
 
 export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
   open,
-  zipSource,
+  zipSources,
   initialFolderId,
   onPickZipFile,
   onClose,
@@ -65,14 +90,15 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
   } = useVault();
 
   const [extracting, setExtracting] = useState(false);
+  const [extractProgressLabel, setExtractProgressLabel] = useState('');
   const [importing, setImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [items, setItems] = useState<ExtractedZipItem[]>([]);
-  const [skippedCount, setSkippedCount] = useState(0);
+  const [archiveGroups, setArchiveGroups] = useState<ArchiveGroup[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filterMode, setFilterMode] = useState<MediaFilter>('media');
 
-  // Destination routing controls
+  // Folder-named extraction (default ON so each .zip extracts into its named folder)
+  const [extractIntoNamedFolders, setExtractIntoNamedFolders] = useState(true);
   const [splitMediaRouting, setSplitMediaRouting] = useState(false);
   const [singleFolderId, setSingleFolderId] = useState<string | null>(initialFolderId);
   const [imagesFolderId, setImagesFolderId] = useState<string | null>(initialFolderId);
@@ -107,44 +133,86 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
     setVideosFolderId(initialFolderId);
     setOtherFolderId(initialFolderId);
     setEncryptExtracted(encryptedUploadMode);
+    setExtractIntoNamedFolders(true);
+    setSplitMediaRouting(false);
     setCreatingForTarget(null);
     setNewFolderName('');
   }, [open, initialFolderId, encryptedUploadMode]);
 
   useEffect(() => {
-    if (!open || !zipSource) {
-      setItems([]);
+    if (!open || zipSources.length === 0) {
+      setArchiveGroups([]);
       setSelectedIds(new Set());
       setErrorMsg(null);
-      setSkippedCount(0);
+      setExtractProgressLabel('');
       return;
     }
 
     let cancelled = false;
     setExtracting(true);
     setErrorMsg(null);
-    setItems([]);
+    setArchiveGroups([]);
 
     (async () => {
       try {
-        const result = await extractZipArchive(zipSource.blob, zipSource.name);
-        if (cancelled) return;
-        setItems(result.items);
-        setSkippedCount(result.skippedSystemCount);
+        const cappedSources = zipSources.slice(0, MAX_ZIP_BATCH_COUNT);
+        const groups: ArchiveGroup[] = [];
 
-        const mediaItems = result.items.filter(
+        for (let idx = 0; idx < cappedSources.length; idx++) {
+          if (cancelled) return;
+          const src = cappedSources[idx];
+          setExtractProgressLabel(
+            cappedSources.length > 1
+              ? `Extracting archive ${idx + 1} of ${cappedSources.length}: ${src.name}`
+              : `Extracting ${src.name} in sandbox...`
+          );
+
+          try {
+            const result = await extractZipArchive(src.blob, src.name);
+            const batchItems: BatchZipItem[] = result.items.map((item) => ({
+              ...item,
+              globalId: `${idx}:${item.id}`,
+              archiveIndex: idx,
+              zipName: src.name,
+            }));
+            groups.push({
+              archiveIndex: idx,
+              zipName: src.name,
+              targetFolderName: deriveFolderNameFromZip(src.name),
+              items: batchItems,
+              skippedCount: result.skippedSystemCount,
+            });
+          } catch (err) {
+            groups.push({
+              archiveIndex: idx,
+              zipName: src.name,
+              targetFolderName: deriveFolderNameFromZip(src.name),
+              items: [],
+              skippedCount: 0,
+              error: err instanceof Error ? err.message : 'Failed to extract archive.',
+            });
+          }
+        }
+
+        if (cancelled) return;
+        setArchiveGroups(groups);
+
+        const allExtracted = groups.flatMap((g) => g.items);
+        if (allExtracted.length === 0 && groups.every((g) => g.error)) {
+          setErrorMsg(groups.map((g) => `${g.zipName}: ${g.error}`).join(' | '));
+          return;
+        }
+
+        const mediaItems = allExtracted.filter(
           (i) => i.category === 'image' || i.category === 'video'
         );
-        if (mediaItems.length > 0) {
+        if (mediaItems.length > 0 && cappedSources.length === 1) {
           setFilterMode('media');
-          setSelectedIds(new Set(mediaItems.map((i) => i.id)));
+          setSelectedIds(new Set(mediaItems.map((i) => i.globalId)));
         } else {
+          // For multi-ZIP batch extraction or non-media archives, default to selecting all extractable files
           setFilterMode('all');
-          setSelectedIds(new Set(result.items.map((i) => i.id)));
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setErrorMsg(err instanceof Error ? err.message : 'Failed to extract ZIP archive.');
+          setSelectedIds(new Set(allExtracted.map((i) => i.globalId)));
         }
       } finally {
         if (!cancelled) setExtracting(false);
@@ -154,13 +222,21 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, zipSource]);
+  }, [open, zipSources]);
+
+  const allItems = useMemo(() => archiveGroups.flatMap((g) => g.items), [archiveGroups]);
+  const skippedCount = useMemo(
+    () => archiveGroups.reduce((sum, g) => sum + g.skippedCount, 0),
+    [archiveGroups]
+  );
 
   useEffect(() => {
     const next: Record<string, string> = {};
-    for (const item of items) {
-      if (item.category === 'image' && item.size < 12 * 1024 * 1024) {
-        next[item.id] = URL.createObjectURL(item.file);
+    let thumbCount = 0;
+    for (const item of allItems) {
+      if (item.category === 'image' && item.size < 12 * 1024 * 1024 && thumbCount < 150) {
+        next[item.globalId] = URL.createObjectURL(item.file);
+        thumbCount += 1;
       }
     }
     Object.values(thumbUrlsRef.current).forEach((u) => URL.revokeObjectURL(u));
@@ -170,7 +246,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
     return () => {
       Object.values(next).forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [items]);
+  }, [allItems]);
 
   const folderOptions = useMemo(() => {
     const byId = new Map(folders.map((f) => [f.id, f]));
@@ -187,36 +263,36 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
     let videos = 0;
     let other = 0;
     let totalSize = 0;
-    for (const item of items) {
+    for (const item of allItems) {
       totalSize += item.size;
       if (item.category === 'image') images += 1;
       else if (item.category === 'video') videos += 1;
       else other += 1;
     }
-    return { images, videos, other, media: images + videos, total: items.length, totalSize };
-  }, [items]);
+    return { images, videos, other, media: images + videos, total: allItems.length, totalSize };
+  }, [allItems]);
 
   const visibleItems = useMemo(() => {
-    return items.filter((item) => {
+    return allItems.filter((item) => {
       if (filterMode === 'media') return item.category === 'image' || item.category === 'video';
       if (filterMode === 'image') return item.category === 'image';
       if (filterMode === 'video') return item.category === 'video';
       return true;
     });
-  }, [items, filterMode]);
+  }, [allItems, filterMode]);
 
   const selectedItems = useMemo(
-    () => items.filter((item) => selectedIds.has(item.id)),
-    [items, selectedIds]
+    () => allItems.filter((item) => selectedIds.has(item.globalId)),
+    [allItems, selectedIds]
   );
 
   if (!open) return null;
 
-  const toggleItem = (id: string) => {
+  const toggleItem = (globalId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(globalId)) next.delete(globalId);
+      else next.add(globalId);
       return next;
     });
   };
@@ -224,7 +300,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
   const handleSelectVisible = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const item of visibleItems) next.add(item.id);
+      for (const item of visibleItems) next.add(item.globalId);
       return next;
     });
   };
@@ -232,9 +308,15 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
   const handleClearVisible = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const item of visibleItems) next.delete(item.id);
+      for (const item of visibleItems) next.delete(item.globalId);
       return next;
     });
+  };
+
+  const updateArchiveFolderName = (archiveIndex: number, nextName: string) => {
+    setArchiveGroups((prev) =>
+      prev.map((g) => (g.archiveIndex === archiveIndex ? { ...g, targetFolderName: nextName } : g))
+    );
   };
 
   const handleCreateFolderInline = async (e: React.FormEvent) => {
@@ -271,7 +353,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
   };
 
   const handleImportSelected = async () => {
-    if (selectedItems.length === 0) return;
+    if (!user || selectedItems.length === 0) return;
     if (encryptExtracted && !isEncryptionArmed) {
       setArmEncryptedModalOpen(true);
       addToast({
@@ -284,13 +366,63 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
 
     setImporting(true);
     try {
-      if (!splitMediaRouting) {
+      if (extractIntoNamedFolders) {
+        const itemsByArchive = new Map<number, BatchZipItem[]>();
+        for (const item of selectedItems) {
+          const list = itemsByArchive.get(item.archiveIndex) ?? [];
+          list.push(item);
+          itemsByArchive.set(item.archiveIndex, list);
+        }
+
+        const createdFolderIds: string[] = [];
+        const existingByName = new Map(
+          folders
+            .filter((f) => f.parentId === singleFolderId)
+            .map((f) => [f.name.toLowerCase(), f])
+        );
+
+        for (const [archiveIdx, batch] of itemsByArchive.entries()) {
+          const group = archiveGroups.find((g) => g.archiveIndex === archiveIdx);
+          const rawName = group?.targetFolderName || deriveFolderNameFromZip(group?.zipName || 'archive');
+          const cleanName = sanitizeFileName(rawName).trim() || 'extracted_archive';
+
+          let targetFolder = existingByName.get(cleanName.toLowerCase());
+          if (!targetFolder) {
+            targetFolder = await storage.createFolder(user.id, cleanName, singleFolderId);
+            existingByName.set(targetFolder.name.toLowerCase(), targetFolder);
+          }
+
+          createdFolderIds.push(targetFolder.id);
+          await uploadFiles(
+            batch.map((i) => i.file),
+            targetFolder.id,
+            { encrypted: encryptExtracted }
+          );
+        }
+
+        await refreshVaultData();
+        onCompleted?.(createdFolderIds.length === 1 ? createdFolderIds[0] : singleFolderId);
+
+        addToast({
+          type: 'success',
+          title: `Extracted ${itemsByArchive.size} ${itemsByArchive.size === 1 ? 'archive' : 'archives'} (${selectedItems.length} files)`,
+          description:
+            createdFolderIds.length === 1
+              ? 'All selected files placed into their named vault folder.'
+              : `Created/updated ${createdFolderIds.length} named folders for your ZIP archives.`,
+        });
+      } else if (!splitMediaRouting) {
         await uploadFiles(
           selectedItems.map((i) => i.file),
           singleFolderId,
           { encrypted: encryptExtracted }
         );
         onCompleted?.(singleFolderId);
+        addToast({
+          type: 'success',
+          title: `Added ${selectedItems.length} extracted ${selectedItems.length === 1 ? 'file' : 'files'}`,
+          description: 'Saved to your chosen vault destination.',
+        });
       } else {
         const grouped = new Map<string, File[]>();
         for (const item of selectedItems) {
@@ -311,15 +443,13 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
           await uploadFiles(batch, folderId, { encrypted: encryptExtracted });
         }
         onCompleted?.(imagesFolderId ?? videosFolderId ?? otherFolderId);
+        addToast({
+          type: 'success',
+          title: `Added ${selectedItems.length} extracted ${selectedItems.length === 1 ? 'file' : 'files'}`,
+          description: 'Media routed to your selected destination folders.',
+        });
       }
 
-      addToast({
-        type: 'success',
-        title: `Added ${selectedItems.length} extracted ${selectedItems.length === 1 ? 'file' : 'files'}`,
-        description: splitMediaRouting
-          ? 'Media routed to your selected destination folders.'
-          : 'Saved to your chosen vault destination.',
-      });
       onClose();
     } finally {
       setImporting(false);
@@ -372,6 +502,13 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
     </div>
   );
 
+  const headerTitle =
+    zipSources.length > 1
+      ? `Extract ${zipSources.length} ZIP Archives (up to ${MAX_ZIP_BATCH_COUNT})`
+      : zipSources.length === 1
+      ? `Extract ZIP: ${zipSources[0].name}`
+      : 'Extract ZIP Archives';
+
   return (
     <div
       role="dialog"
@@ -390,12 +527,10 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
               <Archive className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-[#E6F1EE] truncate">
-                {zipSource ? `Extract ZIP: ${zipSource.name}` : 'Extract ZIP Archive'}
-              </h2>
-              {items.length > 0 && (
+              <h2 className="text-sm font-semibold text-[#E6F1EE] truncate">{headerTitle}</h2>
+              {allItems.length > 0 && (
                 <div className="text-[11px] text-[#8A9D98] tabular-nums truncate">
-                  {counts.images} images · {counts.videos} videos · {counts.other} other · {formatBytes(counts.totalSize)}
+                  {archiveGroups.length} {archiveGroups.length === 1 ? 'archive' : 'archives'} · {counts.images} images · {counts.videos} videos · {counts.other} other · {formatBytes(counts.totalSize)}
                   {skippedCount > 0 ? ` · ${skippedCount} system entries skipped` : ''}
                 </div>
               )}
@@ -410,7 +545,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-white/15 text-[#E6F1EE] hover:border-[#00E5FF]/50 whitespace-nowrap"
               >
                 <FileUp className="w-3.5 h-3.5 text-[#00E5FF]" />
-                <span className="hidden sm:inline">Pick .zip</span>
+                <span className="hidden sm:inline">Pick .zip (max {MAX_ZIP_BATCH_COUNT})</span>
               </button>
             )}
             <button
@@ -430,7 +565,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
           {extracting ? (
             <div className="py-12 flex flex-col items-center justify-center text-center gap-3">
               <Loader2 className="w-6 h-6 text-[#39FF88] animate-spin" />
-              <div className="text-xs text-[#E6F1EE]">Extracting archive contents in sandbox...</div>
+              <div className="text-xs text-[#E6F1EE]">{extractProgressLabel || 'Extracting archive contents in sandbox...'}</div>
             </div>
           ) : errorMsg ? (
             <div
@@ -440,10 +575,10 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
-          ) : items.length === 0 ? (
+          ) : allItems.length === 0 ? (
             <div className="py-10 text-center space-y-3">
               <p className="text-xs text-[#8A9D98] font-sans-ui">
-                No extractable files found inside this archive.
+                No extractable files found inside the selected archives.
               </p>
               {onPickZipFile && (
                 <button
@@ -452,12 +587,65 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
                   className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg"
                 >
                   <FileUp className="w-3.5 h-3.5" />
-                  Select Another .zip File
+                  Select .zip Files (up to {MAX_ZIP_BATCH_COUNT})
                 </button>
               )}
             </div>
           ) : (
             <>
+              {/* Named Folder Mapping per Archive (when enabled) */}
+              {extractIntoNamedFolders && archiveGroups.length > 0 && (
+                <div className="bg-[#090D0D] border border-[#00E5FF]/25 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-[#E6F1EE]">
+                        Folder Names for Extracted Archives ({archiveGroups.length}/{MAX_ZIP_BATCH_COUNT})
+                      </div>
+                      <div className="text-[11px] text-[#8A9D98] font-sans-ui">
+                        Each .zip file extracts into its own named folder inside the parent destination below.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                    {archiveGroups.map((group) => (
+                      <div
+                        key={group.archiveIndex}
+                        className="flex flex-col sm:flex-row sm:items-center gap-2 bg-[#030505] border border-white/10 rounded-lg px-3 py-2"
+                      >
+                        <div className="min-w-0 sm:w-1/2 flex items-center gap-2">
+                          <Archive className="w-3.5 h-3.5 text-[#00E5FF] shrink-0" />
+                          <span className="text-xs text-[#A3B5B0] truncate" title={group.zipName}>
+                            {group.zipName}
+                          </span>
+                          <span className="text-[10px] text-[#6E827D] shrink-0">
+                            ({group.items.length})
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          <Folder className="w-3.5 h-3.5 text-[#39FF88] shrink-0" />
+                          <input
+                            type="text"
+                            value={group.targetFolderName}
+                            onChange={(e) =>
+                              updateArchiveFolderName(group.archiveIndex, e.target.value)
+                            }
+                            aria-label={`Target folder name for ${group.zipName}`}
+                            placeholder="Folder name"
+                            className="w-full bg-[#090D0D] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded px-2.5 py-1 text-xs text-[#E6F1EE]"
+                          />
+                        </div>
+
+                        {group.error && (
+                          <span className="text-[10px] text-red-400 shrink-0">{group.error}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Filter & Selection Toolbar */}
               <div className="flex flex-wrap items-center justify-between gap-2.5">
                 <div className="flex flex-wrap items-center gap-1.5 bg-[#030505] border border-white/10 rounded-lg p-1">
@@ -509,15 +697,18 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
                   No files match this media filter. Switch to All Files to inspect other archive entries.
                 </div>
               ) : (
-                <div className="bg-[#030505] border border-white/10 rounded-xl divide-y divide-white/5 max-h-60 overflow-y-auto">
+                <div className="bg-[#030505] border border-white/10 rounded-xl divide-y divide-white/5 max-h-56 overflow-y-auto">
                   {visibleItems.map((item) => {
-                    const checked = selectedIds.has(item.id);
-                    const thumb = thumbUrls[item.id];
+                    const checked = selectedIds.has(item.globalId);
+                    const thumb = thumbUrls[item.globalId];
+                    const targetFolder =
+                      archiveGroups.find((g) => g.archiveIndex === item.archiveIndex)
+                        ?.targetFolderName || '';
                     return (
                       <button
-                        key={item.id}
+                        key={item.globalId}
                         type="button"
-                        onClick={() => toggleItem(item.id)}
+                        onClick={() => toggleItem(item.globalId)}
                         className={`w-full px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors ${
                           checked ? 'bg-[#39FF88]/[0.05]' : 'hover:bg-white/[0.02]'
                         }`}
@@ -549,6 +740,7 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
                             {item.fileName}
                           </div>
                           <div className="text-[11px] text-[#6E827D] truncate">
+                            {extractIntoNamedFolders && targetFolder ? `[${targetFolder}/] ` : ''}
                             {item.entryPath} · {item.category} · {formatBytes(item.size)}
                           </div>
                         </div>
@@ -563,31 +755,54 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-xs font-semibold text-[#E6F1EE]">
-                      Destination Place in Vault
+                      {extractIntoNamedFolders ? 'Parent Vault Destination' : 'Destination Place in Vault'}
                     </div>
                     <div className="text-[11px] text-[#8A9D98] font-sans-ui">
-                      Extracted images &amp; videos also appear automatically in Images and Videos dock views.
+                      {extractIntoNamedFolders
+                        ? 'Named archive folders will be created inside this parent folder.'
+                        : 'Extracted files will be placed directly into the selected destination.'}
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    aria-pressed={splitMediaRouting}
-                    onClick={() => setSplitMediaRouting((s) => !s)}
-                    className={`px-2.5 py-1.5 text-[11px] rounded-lg border transition-colors whitespace-nowrap ${
-                      splitMediaRouting
-                        ? 'border-[#00E5FF]/50 bg-[#00E5FF]/10 text-[#00E5FF]'
-                        : 'border-white/15 text-[#8A9D98] hover:text-[#E6F1EE]'
-                    }`}
-                  >
-                    {splitMediaRouting ? 'Split by Type: On' : 'Split Images / Videos'}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      aria-pressed={extractIntoNamedFolders}
+                      onClick={() => {
+                        const next = !extractIntoNamedFolders;
+                        setExtractIntoNamedFolders(next);
+                        if (next) setSplitMediaRouting(false);
+                      }}
+                      className={`px-2.5 py-1.5 text-[11px] rounded-lg border transition-colors whitespace-nowrap ${
+                        extractIntoNamedFolders
+                          ? 'border-[#39FF88]/50 bg-[#39FF88]/10 text-[#39FF88]'
+                          : 'border-white/15 text-[#8A9D98] hover:text-[#E6F1EE]'
+                      }`}
+                    >
+                      {extractIntoNamedFolders ? 'Named Folders: On' : 'Named Folders: Off'}
+                    </button>
+
+                    {!extractIntoNamedFolders && (
+                      <button
+                        type="button"
+                        aria-pressed={splitMediaRouting}
+                        onClick={() => setSplitMediaRouting((s) => !s)}
+                        className={`px-2.5 py-1.5 text-[11px] rounded-lg border transition-colors whitespace-nowrap ${
+                          splitMediaRouting
+                            ? 'border-[#00E5FF]/50 bg-[#00E5FF]/10 text-[#00E5FF]'
+                            : 'border-white/15 text-[#8A9D98] hover:text-[#E6F1EE]'
+                        }`}
+                      >
+                        {splitMediaRouting ? 'Split by Type: On' : 'Split Images / Videos'}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {!splitMediaRouting ? (
+                {extractIntoNamedFolders || !splitMediaRouting ? (
                   renderFolderSelect(
                     'zip-dest-single',
-                    'Target Vault Folder',
+                    extractIntoNamedFolders ? 'Parent Vault Folder' : 'Target Vault Folder',
                     singleFolderId,
                     setSingleFolderId,
                     'single'
@@ -681,7 +896,8 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
         {/* Footer Actions */}
         <div className="px-5 py-3.5 border-t border-white/10 bg-[#070A0A] flex flex-wrap items-center justify-between gap-3">
           <div className="text-[11px] text-[#8A9D98] tabular-nums">
-            {selectedItems.length} {selectedItems.length === 1 ? 'file' : 'files'} selected for vault import
+            {selectedItems.length} {selectedItems.length === 1 ? 'file' : 'files'} across{' '}
+            {archiveGroups.length} {archiveGroups.length === 1 ? 'archive' : 'archives'} selected
           </div>
 
           <div className="flex items-center gap-2.5">
@@ -702,7 +918,9 @@ export const ZipExtractorModal: React.FC<ZipExtractorModalProps> = ({
               <Archive className="w-3.5 h-3.5" />
               <span>
                 {importing
-                  ? 'Adding to Vault...'
+                  ? 'Extracting & Uploading...'
+                  : extractIntoNamedFolders
+                  ? `Extract into Named ${archiveGroups.length === 1 ? 'Folder' : 'Folders'}`
                   : `Add ${selectedItems.length} ${selectedItems.length === 1 ? 'File' : 'Files'} to Vault`}
               </span>
             </button>

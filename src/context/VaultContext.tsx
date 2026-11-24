@@ -1,6 +1,13 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { generateUuid, normalizeRoohKey } from '../services/crypto';
-import { HybridVaultStorageProvider } from '../storage/HybridVaultStorageProvider';
+import {
+  connectGoogleDrive,
+  disconnectGoogleDrive,
+  DriveConnectionStatus,
+  getDriveConnectionStatus,
+  initDriveAuth,
+} from '../services/googleDriveStorage';
+import { CloudSyncSummary, HybridVaultStorageProvider } from '../storage/HybridVaultStorageProvider';
 import { StorageProvider } from '../storage/StorageProvider';
 import {
   BookmarkRecord,
@@ -50,6 +57,11 @@ interface VaultContextValue {
 
   refreshVaultData: () => Promise<void>;
   resolveFileBlob: (file: FileRecord) => Promise<Blob>;
+  isSyncingCloud: boolean;
+  syncVaultNow: (options?: { includeGoogleDrive?: boolean }) => Promise<CloudSyncSummary | null>;
+  driveStatus: DriveConnectionStatus;
+  connectDrive: () => Promise<DriveConnectionStatus>;
+  disconnectDrive: () => Promise<void>;
   register: (username: string) => Promise<void>;
   login: (username: string, roohKey: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -102,6 +114,26 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const uploadControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [driveStatus, setDriveStatus] = useState<DriveConnectionStatus>(() =>
+    getDriveConnectionStatus()
+  );
+
+  useEffect(() => {
+    const unsubscribe = initDriveAuth(
+      (authUser) => {
+        setDriveStatus({
+          connected: true,
+          email: authUser.email,
+          displayName: authUser.displayName,
+        });
+      },
+      () => {
+        setDriveStatus(getDriveConnectionStatus());
+      }
+    );
+    return unsubscribe;
+  }, []);
 
   const addToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
     const id = generateUuid();
@@ -152,11 +184,41 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await loadUserWorkspace(user.id);
   }, [user, loadUserWorkspace]);
 
-  const resolveFileBlob = useCallback(async (file: FileRecord): Promise<Blob> => {
-    return file.content;
+  const resolveFileBlob = useCallback(
+    async (file: FileRecord): Promise<Blob> => {
+      if (!user) return file.content;
+      return storageSingleton.resolveFileBlob(user.id, file);
+    },
+    [user]
+  );
+
+  const syncVaultNow = useCallback(
+    async (options?: { includeGoogleDrive?: boolean }): Promise<CloudSyncSummary | null> => {
+      if (!user) return null;
+      setIsSyncingCloud(true);
+      try {
+        const res = await storageSingleton.syncBidirectional(user.id, options);
+        await loadUserWorkspace(user.id);
+        return res.pushSummary;
+      } finally {
+        setIsSyncingCloud(false);
+      }
+    },
+    [user, loadUserWorkspace]
+  );
+
+  const connectDrive = useCallback(async (): Promise<DriveConnectionStatus> => {
+    const status = await connectGoogleDrive();
+    setDriveStatus(status);
+    return status;
   }, []);
 
-  // Initial session hydration + ?autostart=1 support
+  const disconnectDrive = useCallback(async (): Promise<void> => {
+    await disconnectGoogleDrive();
+    setDriveStatus({ connected: false, email: null, displayName: null });
+  }, []);
+
+  // Initial session hydration + ?autostart=1 support + background bidirectional sync
   useEffect(() => {
     let active = true;
     (async () => {
@@ -169,6 +231,15 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setUser(activeSession.user);
           setSession(activeSession.session);
           await loadUserWorkspace(activeSession.user.id);
+          // Background cross-browser sync so newly added remote/local files align automatically
+          storageSingleton
+            .syncBidirectional(activeSession.user.id)
+            .then(async (res) => {
+              if (active && res.pulledUpdates) {
+                await loadUserWorkspace(activeSession.user.id);
+              }
+            })
+            .catch(() => {});
           return;
         }
 
@@ -493,6 +564,11 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         dismissToast,
         refreshVaultData,
         resolveFileBlob,
+        isSyncingCloud,
+        syncVaultNow,
+        driveStatus,
+        connectDrive,
+        disconnectDrive,
         register,
         login,
         logout,

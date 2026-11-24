@@ -111,9 +111,37 @@
         "updatedAt"
       ]
     },
+    "VaultAlias": {
+      "title": "VaultAlias",
+      "description": "Maps normalized lowercase username to its canonical vault UUID.",
+      "type": "object",
+      "properties": {
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9._\\-]+$"
+        },
+        "vaultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["usernameLower", "vaultId", "createdAt", "updatedAt"]
+    },
     "VaultFile": {
       "title": "VaultFile",
-      "description": "Uploaded file metadata record synced across browsers, linked to fileChunks.",
+      "description": "Uploaded file metadata record synced across browsers, linked to fileChunks or Google Drive.",
       "type": "object",
       "properties": {
         "id": {
@@ -159,6 +187,11 @@
         },
         "cloudSynced": {
           "type": "boolean"
+        },
+        "driveFileId": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Optional Google Drive file ID for overflow or backup binary storage."
         },
         "isEncrypted": {
           "type": "boolean"
@@ -456,6 +489,10 @@
     }
   },
   "firestore": {
+    "/vaultAliases/{usernameLower}": {
+      "schema": { "$ref": "#/entities/VaultAlias" },
+      "description": "Maps lowercase username to canonical vault UUID for multi-browser access."
+    },
     "/vaults/{vaultUid}": {
       "schema": { "$ref": "#/entities/VaultProfile" },
       "description": "Root vault account profile owned by the authenticated user."
