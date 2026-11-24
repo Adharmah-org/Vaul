@@ -24,7 +24,7 @@ export const CANONICAL_VAULT_SEEDS: CanonicalVaultSeed[] = [
     driveAccountEmail: 'shunyavansh@gmail.com',
     aliases: ['tejasphirake', 'shunyavansh@gmail.com'],
     roohKeyHash:
-      'pbkdf2$120000$df79d8f7057ae10c6c309747ce788044$1b65324189cf5b5cc6eaf36a0d3fc5bcc4ed2d95f101a864434a2f7a92601f68',
+      'pbkdf2$120000$e4e4828b953f16223ed1903096341670$ffcf5e0c9ea33f3cd3e647680e3ee6854acd3e68b3e2aca099b537978a18b2de',
   },
 ];
 

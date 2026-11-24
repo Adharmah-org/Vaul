@@ -6,7 +6,6 @@ import {
   Copy,
   Download,
   KeyRound,
-  Leaf,
   Lock,
   ShieldAlert,
   Terminal,
@@ -15,7 +14,6 @@ import {
 import { useVault } from '../context/VaultContext';
 import { validateUsername } from '../services/crypto';
 import { VaultModal } from './Modals';
-import { RoohUnlockerView } from './RoohUnlockerView';
 
 const TERMINAL_STEPS = [
   'INITIALIZING ROOH SYSTEM...',
@@ -77,7 +75,6 @@ export const AuthTerminal: React.FC = () => {
   // One-time recovery screen state
   const [keyCopied, setKeyCopied] = useState(false);
   const [keySavedConfirmed, setKeySavedConfirmed] = useState(false);
-  const [unlockerOpen, setUnlockerOpen] = useState(false);
 
   // Forgot Rooh Key modal state
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -436,22 +433,13 @@ export const AuthTerminal: React.FC = () => {
             </div>
           </div>
 
-          <div className="mt-6 pt-5 border-t border-white/10 space-y-4">
+          <div className="mt-6 pt-5 border-t border-white/10">
             <div className="flex items-start gap-2.5 text-[11px] text-[#8A9D98] font-sans-ui leading-relaxed">
               <ShieldAlert className="w-4 h-4 text-[#00E5FF] shrink-0 mt-0.5" />
               <p>
                 <strong className="text-[#E6F1EE] font-medium">Cross-Browser Vault Auth:</strong> Credentials are hashed with Web Crypto PBKDF2 and synced cleanly so your Username or Vault UUID + Rooh Key unlocks your vault from any browser.
               </p>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setUnlockerOpen(true)}
-              className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg border border-white/15 bg-[#030505] text-xs font-medium text-[#E6F1EE] hover:border-[#39FF88]/50 hover:text-[#39FF88] transition-colors whitespace-nowrap"
-            >
-              <Leaf className="w-3.5 h-3.5 text-[#39FF88]" />
-              <span>Unlock Downloaded .rooh File</span>
-            </button>
           </div>
         </div>
 
@@ -554,18 +542,10 @@ export const AuthTerminal: React.FC = () => {
                 {isSubmitting ? 'Authenticating...' : 'Unlock Vault'}
               </button>
 
-              <div className="pt-3 border-t border-white/10 space-y-2 text-center">
+              <div className="pt-3 border-t border-white/10 text-center">
                 <p className="text-[11px] text-[#8A9D98] font-sans-ui">
                   Access from any browser: Enter your Username (or Vault UUID) &amp; Rooh Key to connect your vault anywhere.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setUnlockerOpen(true)}
-                  className="inline-flex items-center gap-1.5 text-xs text-[#00E5FF] hover:underline"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  Have an offline .rooh capsule? Unlock capsule here
-                </button>
               </div>
             </form>
           ) : (
@@ -605,14 +585,6 @@ export const AuthTerminal: React.FC = () => {
           )}
         </div>
       </div>
-
-      <VaultModal
-        open={unlockerOpen}
-        title="Rooh Unlocker — Decrypt .rooh Capsule"
-        onClose={() => setUnlockerOpen(false)}
-      >
-        <RoohUnlockerView compact />
-      </VaultModal>
 
       <VaultModal
         open={forgotOpen}
@@ -688,7 +660,7 @@ export const AuthTerminal: React.FC = () => {
           </div>
 
           <div className="bg-[#0F1515] border border-white/10 rounded-lg p-3 text-[11px] text-[#8A9D98] font-sans-ui">
-            Previously AES-256-GCM encrypted files or downloaded <code className="text-[#E6F1EE]">.rooh</code> capsules encrypted with your old key still require the old key to decrypt.
+            Previously AES-256-GCM encrypted files encrypted with your old key still require the old key to decrypt.
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2 pt-1">

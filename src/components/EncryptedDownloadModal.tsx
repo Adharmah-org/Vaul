@@ -5,7 +5,6 @@ import {
   FileCode2,
   KeyRound,
   Leaf,
-  Lock,
   ShieldCheck,
 } from 'lucide-react';
 import { FileRecord } from '../types/vault';
@@ -40,7 +39,7 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
 }) => {
   const { addToast, resolveFileBlob } = useVault();
   const [roohKey, setRoohKey] = useState('');
-  const [busyAction, setBusyAction] = useState<'capsule' | 'html' | 'decrypt' | null>(null);
+  const [busyAction, setBusyAction] = useState<'html' | 'decrypt' | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,29 +53,6 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
   if (!file || !file.isEncrypted || !file.encryptionMeta) return null;
 
   const meta = file.encryptionMeta;
-
-  const handleDownloadCapsule = async () => {
-    setErrorMsg(null);
-    setBusyAction('capsule');
-    try {
-      const sourceBlob = await resolveFileBlob(file);
-      const capsule = await buildRoohCapsuleFromBlob(file.name, sourceBlob, meta);
-      const blob = new Blob([JSON.stringify(capsule, null, 2)], {
-        type: 'application/json;charset=utf-8',
-      });
-      triggerBlobDownload(blob, `${file.name}.rooh`);
-      addToast({
-        type: 'success',
-        title: `Downloaded ${file.name}.rooh`,
-        description: 'Requires your Rooh Key in Rooh Unlocker to open.',
-      });
-      onClose();
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to build .rooh capsule.');
-    } finally {
-      setBusyAction(null);
-    }
-  };
 
   const handleDownloadOfflineHtml = async () => {
     setErrorMsg(null);
@@ -139,30 +115,11 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
           </div>
         </div>
 
-        {/* Option 1 & 2: Sealed Downloads that require Rooh Key after download */}
+        {/* Option 1: Self-contained offline HTML export */}
         <div className="space-y-2.5">
           <div className="text-[11px] text-[#A3B5B0] font-sans-ui">
             Export sealed ciphertext (Rooh Key required after downloading):
           </div>
-
-          <button
-            type="button"
-            disabled={busyAction !== null}
-            onClick={handleDownloadCapsule}
-            className="w-full text-left bg-[#030505] border border-white/15 hover:border-[#39FF88]/50 rounded-lg p-3 transition-colors flex items-start gap-3 disabled:opacity-50"
-          >
-            <div className="w-8 h-8 rounded-lg bg-[#39FF88]/10 border border-[#39FF88]/25 flex items-center justify-center text-[#39FF88] shrink-0 mt-0.5">
-              <Lock className="w-4 h-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-semibold text-[#E6F1EE]">
-                {busyAction === 'capsule' ? 'Packaging .rooh Capsule...' : 'Download .rooh Encrypted Capsule'}
-              </div>
-              <div className="text-[11px] text-[#8A9D98] font-sans-ui mt-0.5">
-                Compact AES-256-GCM capsule unlocked via Rooh Unlocker.
-              </div>
-            </div>
-          </button>
 
           <button
             type="button"

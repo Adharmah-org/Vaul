@@ -13,7 +13,6 @@ import {
   FolderPlus,
   Globe,
   Image as ImageIcon,
-  KeyRound,
   Leaf,
   Link2,
   LogOut,
@@ -36,7 +35,6 @@ import { FileExplorerView } from './FileExplorerView';
 import { TextPromptModal } from './Modals';
 import { NotesView } from './NotesView';
 import { PrivateBrowserView } from './PrivateBrowserView';
-import { RoohUnlockerView } from './RoohUnlockerView';
 import { SettingsView } from './SettingsView';
 import { TrashView } from './TrashView';
 import { UploadProgressTray } from './UploadProgressTray';
@@ -58,7 +56,6 @@ const DOCK_ITEMS: DockItem[] = [
   { id: 'notes', label: 'Notes', path: '/notes', icon: FilePlus },
   { id: 'favorites', label: 'Favorites', path: '/favorites', icon: Star },
   { id: 'trash', label: 'Trash', path: '/trash', icon: Trash2 },
-  { id: 'unlocker', label: 'Rooh Unlocker', path: '/unlocker', icon: KeyRound },
   { id: 'settings', label: 'Settings', path: '/settings', icon: Settings },
 ];
 
@@ -79,6 +76,9 @@ export const HackerDockShell: React.FC = () => {
     refreshVaultData,
     logout,
     addToast,
+    otherLocalFilesCount,
+    consolidateLocalFiles,
+    isSyncingCloud,
   } = useVault();
 
   const location = useLocation();
@@ -107,7 +107,6 @@ export const HackerDockShell: React.FC = () => {
       'favorites',
       'trash',
       'analytics',
-      'unlocker',
       'settings',
     ];
     return valid.includes(seg) ? seg : 'all';
@@ -524,6 +523,38 @@ export const HackerDockShell: React.FC = () => {
 
         {/* Main Workspace Body */}
         <main className="flex-1 p-4 md:p-6 pb-24 md:pb-8 max-w-[1440px] w-full mx-auto">
+          {otherLocalFilesCount > 0 && (
+            <div className="mb-4 bg-[#090D0D] border border-[#39FF88]/40 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs font-sans-ui text-[#C7D8D3]">
+                Found <strong className="text-[#39FF88]">{otherLocalFilesCount}</strong> local{' '}
+                {otherLocalFilesCount === 1 ? 'file' : 'files'} saved under another profile on this browser. Link them into{' '}
+                <code className="text-[#00E5FF] font-mono">{user?.id}</code> to restore immediate access and sync to cloud.
+              </div>
+              <button
+                type="button"
+                disabled={isSyncingCloud}
+                onClick={async () => {
+                  try {
+                    const moved = await consolidateLocalFiles();
+                    addToast({
+                      type: 'success',
+                      title: 'Local files restored',
+                      description: `Linked ${moved} local files into ${user?.id} and synced to cloud.`,
+                    });
+                  } catch (err) {
+                    addToast({
+                      type: 'error',
+                      title: 'Failed to link local files',
+                      description: err instanceof Error ? err.message : 'Unable to link local files.',
+                    });
+                  }
+                }}
+                className="px-3.5 py-1.5 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg hover:bg-[#52FF99] disabled:opacity-50 shrink-0"
+              >
+                {isSyncingCloud ? 'Linking...' : 'Link & Sync Local Files'}
+              </button>
+            </div>
+          )}
           {activeSection === 'links' ? (
             <BookmarksView globalSearchQuery={searchQuery} />
           ) : activeSection === 'browser' ? (
@@ -534,8 +565,6 @@ export const HackerDockShell: React.FC = () => {
             <TrashView />
           ) : activeSection === 'analytics' ? (
             <AnalyticsView />
-          ) : activeSection === 'unlocker' ? (
-            <RoohUnlockerView />
           ) : activeSection === 'settings' ? (
             <SettingsView />
           ) : (

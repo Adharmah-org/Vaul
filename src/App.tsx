@@ -46,7 +46,6 @@ const VaultAppRouter: React.FC = () => {
           <Route path="/favorites" element={<HackerDockShell />} />
           <Route path="/trash" element={<HackerDockShell />} />
           <Route path="/analytics" element={<HackerDockShell />} />
-          <Route path="/unlocker" element={<HackerDockShell />} />
           <Route path="/settings" element={<HackerDockShell />} />
           <Route path="*" element={<Navigate to="/all" replace />} />
         </Routes>

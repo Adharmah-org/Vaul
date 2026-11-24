@@ -432,7 +432,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
                 className="w-full py-2 px-3 rounded-lg text-xs border border-white/15 text-[#E6F1EE] hover:border-[#00E5FF]/50 inline-flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 <Download className="w-3.5 h-3.5 text-[#00E5FF]" />
-                <span>Export Sealed .rooh / .rooh.html Capsule</span>
+                <span>Export Offline Encrypted HTML / Decrypt</span>
               </button>
             </div>
           </div>

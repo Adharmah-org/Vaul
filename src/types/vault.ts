@@ -16,7 +16,6 @@ export type DockSection =
   | 'browser'
   | 'notes'
   | 'favorites'
-  | 'unlocker'
   | 'trash'
   | 'analytics'
   | 'settings';

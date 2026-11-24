@@ -391,10 +391,16 @@ export class FirestoreStorageProvider implements StorageProvider {
       }
     }
 
-    // If canonical seed exists and its primary vault doc isn't created yet, verify against seed hash & provision it
+    // If canonical seed exists and its primary vault doc isn't created yet, verify against legacy/seed hash & provision it
     if (seed && (!resolvedUid || resolvedUid !== seed.vaultId)) {
-      const hashToCheck = data?.roohKeyHash ? String(data.roohKeyHash) : seed.roohKeyHash;
-      const keyOk = await verifySecret(normalizedKey, hashToCheck);
+      let hashToCheck = data?.roohKeyHash ? String(data.roohKeyHash) : seed.roohKeyHash;
+      let keyOk = await verifySecret(normalizedKey, hashToCheck);
+      if (!keyOk && hashToCheck !== seed.roohKeyHash) {
+        keyOk = await verifySecret(normalizedKey, seed.roohKeyHash);
+        if (keyOk) {
+          hashToCheck = seed.roohKeyHash;
+        }
+      }
       if (!keyOk) {
         throw new Error('ACCESS DENIED: Invalid Rooh Key.');
       }
