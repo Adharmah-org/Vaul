@@ -65,6 +65,7 @@ export interface StorageProvider {
   toggleFileFavorite(userId: string, fileId: string): Promise<FileRecord>;
   updateFileTags(userId: string, fileId: string, tags: string[]): Promise<FileRecord>;
   deleteFileToTrash(userId: string, fileId: string): Promise<void>;
+  resolveFileBlob?(userId: string, file: FileRecord): Promise<Blob>;
 
   // Notes
   listNotes(userId: string): Promise<NoteRecord[]>;

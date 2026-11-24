@@ -38,7 +38,7 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
   file,
   onClose,
 }) => {
-  const { addToast } = useVault();
+  const { addToast, resolveFileBlob } = useVault();
   const [roohKey, setRoohKey] = useState('');
   const [busyAction, setBusyAction] = useState<'capsule' | 'html' | 'decrypt' | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -59,7 +59,8 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
     setErrorMsg(null);
     setBusyAction('capsule');
     try {
-      const capsule = await buildRoohCapsuleFromBlob(file.name, file.content, meta);
+      const sourceBlob = await resolveFileBlob(file);
+      const capsule = await buildRoohCapsuleFromBlob(file.name, sourceBlob, meta);
       const blob = new Blob([JSON.stringify(capsule, null, 2)], {
         type: 'application/json;charset=utf-8',
       });
@@ -81,7 +82,8 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
     setErrorMsg(null);
     setBusyAction('html');
     try {
-      const capsule = await buildRoohCapsuleFromBlob(file.name, file.content, meta);
+      const sourceBlob = await resolveFileBlob(file);
+      const capsule = await buildRoohCapsuleFromBlob(file.name, sourceBlob, meta);
       const html = buildOfflineCapsuleHtml(capsule);
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       triggerBlobDownload(blob, `${file.name}.rooh.html`);
@@ -103,7 +105,8 @@ export const EncryptedDownloadModal: React.FC<EncryptedDownloadModalProps> = ({
     setErrorMsg(null);
     setBusyAction('decrypt');
     try {
-      const plainBlob = await decryptBlobWithRoohKey(file.content, meta, roohKey);
+      const sourceBlob = await resolveFileBlob(file);
+      const plainBlob = await decryptBlobWithRoohKey(sourceBlob, meta, roohKey);
       triggerBlobDownload(plainBlob, file.name);
       addToast({
         type: 'success',

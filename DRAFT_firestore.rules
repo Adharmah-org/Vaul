@@ -1,0 +1,700 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Security Primitives
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidChunkId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 160 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isVaultOwner(vaultUid) {
+      return isVerifiedUser() && request.auth.uid == vaultUid;
+    }
+
+    function isMasterVaultMember(vaultUid) {
+      return isVaultOwner(vaultUid)
+        && exists(/databases/$(database)/documents/vaults/$(vaultUid))
+        && get(/databases/$(database)/documents/vaults/$(vaultUid)).data.ownerUid == request.auth.uid;
+    }
+
+    function isValidOptionalId(val) {
+      return val == null || isValidId(val);
+    }
+
+    function isValidTagList(tags) {
+      return tags is list
+        && tags.size() <= 20
+        && (tags.size() == 0 || (tags[0] is string && tags[0].size() >= 1 && tags[0].size() <= 40));
+    }
+
+    function isValidPreferences(p) {
+      return p is map
+        && p.keys().hasAll([
+          'accentMode',
+          'matrixRain',
+          'scanlines',
+          'reducedMotion',
+          'sessionDurationMinutes',
+          'defaultViewMode'
+        ])
+        && p.keys().hasOnly([
+          'accentMode',
+          'matrixRain',
+          'scanlines',
+          'reducedMotion',
+          'sessionDurationMinutes',
+          'defaultViewMode'
+        ])
+        && (p.accentMode == 'matrix' || p.accentMode == 'cyan')
+        && p.matrixRain is bool
+        && p.scanlines is bool
+        && p.reducedMotion is bool
+        && p.sessionDurationMinutes is number
+        && p.sessionDurationMinutes >= 5
+        && p.sessionDurationMinutes <= 1440
+        && (p.defaultViewMode == 'grid' || p.defaultViewMode == 'list');
+    }
+
+    function isValidEncryptionMeta(meta, isEncrypted) {
+      return (!isEncrypted && meta == null)
+        || (isEncrypted
+          && meta is map
+          && meta.keys().hasAll([
+            'algorithm',
+            'kdf',
+            'iterations',
+            'saltBase64',
+            'ivBase64',
+            'originalMimeType',
+            'originalSize',
+            'encryptedAt'
+          ])
+          && meta.keys().hasOnly([
+            'algorithm',
+            'kdf',
+            'iterations',
+            'saltBase64',
+            'ivBase64',
+            'originalMimeType',
+            'originalSize',
+            'encryptedAt'
+          ])
+          && meta.algorithm == 'AES-256-GCM'
+          && meta.kdf == 'PBKDF2-SHA256'
+          && meta.iterations is number
+          && meta.iterations >= 100000
+          && meta.iterations <= 1000000
+          && meta.saltBase64 is string
+          && meta.saltBase64.size() >= 8
+          && meta.saltBase64.size() <= 128
+          && meta.ivBase64 is string
+          && meta.ivBase64.size() >= 8
+          && meta.ivBase64.size() <= 128
+          && meta.originalMimeType is string
+          && meta.originalMimeType.size() >= 1
+          && meta.originalMimeType.size() <= 160
+          && meta.originalSize is number
+          && meta.originalSize >= 0
+          && meta.originalSize <= 104857600
+          && meta.encryptedAt is number
+          && meta.encryptedAt > 0);
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidVaultProfile(data, vaultUid) {
+      return data.keys().hasAll([
+          'ownerUid',
+          'username',
+          'usernameLower',
+          'passwordHash',
+          'roohKeyHash',
+          'preferences',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid',
+          'username',
+          'usernameLower',
+          'passwordHash',
+          'roohKeyHash',
+          'preferences',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
+        && data.username is string
+        && data.username.size() >= 3
+        && data.username.size() <= 32
+        && data.username.matches('^[a-zA-Z0-9._\\-]+$')
+        && data.usernameLower is string
+        && data.usernameLower.size() >= 3
+        && data.usernameLower.size() <= 32
+        && data.usernameLower.matches('^[a-z0-9._\\-]+$')
+        && data.passwordHash is string
+        && data.passwordHash.size() >= 20
+        && data.passwordHash.size() <= 256
+        && data.roohKeyHash is string
+        && data.roohKeyHash.size() >= 20
+        && data.roohKeyHash.size() <= 256
+        && isValidPreferences(data.preferences)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFolder(data, folderId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'name',
+          'parentId',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'name',
+          'parentId',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == folderId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 180
+        && isValidOptionalId(data.parentId)
+        && isValidTagList(data.tags)
+        && data.isFavorite is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFile(data, fileId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'name',
+          'folderId',
+          'mimeType',
+          'category',
+          'extension',
+          'size',
+          'chunkCount',
+          'cloudSynced',
+          'isEncrypted',
+          'encryptionMeta',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'name',
+          'folderId',
+          'mimeType',
+          'category',
+          'extension',
+          'size',
+          'chunkCount',
+          'cloudSynced',
+          'isEncrypted',
+          'encryptionMeta',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == fileId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 255
+        && isValidOptionalId(data.folderId)
+        && data.mimeType is string
+        && data.mimeType.size() >= 1
+        && data.mimeType.size() <= 160
+        && data.category is string
+        && data.category.size() >= 1
+        && data.category.size() <= 20
+        && data.category in ['image', 'video', 'audio', 'document', 'archive', 'code', 'other']
+        && data.extension is string
+        && data.extension.size() <= 32
+        && data.size is number
+        && data.size >= 0
+        && data.size <= 104857600
+        && data.chunkCount is number
+        && data.chunkCount >= 0
+        && data.chunkCount <= 30
+        && data.cloudSynced is bool
+        && data.isEncrypted is bool
+        && isValidEncryptionMeta(data.encryptionMeta, data.isEncrypted)
+        && isValidTagList(data.tags)
+        && data.isFavorite is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFileChunk(data, chunkId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'fileId',
+          'chunkIndex',
+          'dataBase64',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'fileId',
+          'chunkIndex',
+          'dataBase64',
+          'createdAt'
+        ])
+        && isValidChunkId(data.id)
+        && data.id == chunkId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && isValidId(data.fileId)
+        && data.chunkIndex is number
+        && data.chunkIndex >= 0
+        && data.chunkIndex <= 30
+        && data.dataBase64 is string
+        && data.dataBase64.size() <= 520000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNote(data, noteId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'title',
+          'content',
+          'folderId',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'title',
+          'content',
+          'folderId',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == noteId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 200
+        && data.content is string
+        && data.content.size() <= 250000
+        && isValidOptionalId(data.folderId)
+        && isValidTagList(data.tags)
+        && data.isFavorite is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBookmark(data, bookmarkId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'url',
+          'title',
+          'description',
+          'faviconUrl',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'url',
+          'title',
+          'description',
+          'faviconUrl',
+          'tags',
+          'isFavorite',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == bookmarkId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.url is string
+        && data.url.size() >= 8
+        && data.url.size() <= 2048
+        && data.url.matches('^https?://.+')
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 200
+        && data.description is string
+        && data.description.size() <= 1000
+        && data.faviconUrl is string
+        && data.faviconUrl.size() <= 2048
+        && isValidTagList(data.tags)
+        && data.isFavorite is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTag(data, tagId) {
+      return data.keys().hasAll(['id', 'ownerUid', 'name', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'name', 'createdAt'])
+        && isValidId(data.id)
+        && data.id == tagId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 40
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTrash(data, trashId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'itemType',
+          'itemId',
+          'title',
+          'size',
+          'originalParentId',
+          'payload',
+          'deletedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'itemType',
+          'itemId',
+          'title',
+          'size',
+          'originalParentId',
+          'payload',
+          'deletedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == trashId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.itemType is string
+        && data.itemType.size() >= 1
+        && data.itemType.size() <= 20
+        && data.itemType in ['file', 'folder', 'note', 'bookmark']
+        && isValidId(data.itemId)
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 255
+        && data.size is number
+        && data.size >= 0
+        && data.size <= 104857600
+        && isValidOptionalId(data.originalParentId)
+        && data.payload is map
+        && data.payload.keys().size() >= 1
+        && data.payload.keys().size() <= 4
+        && data.payload.keys().hasOnly(['record', 'descendantFolders', 'files', 'notes'])
+        && data.deletedAt is timestamp;
+    }
+
+    // 4. Collection Match Blocks
+    match /vaults/{vaultUid} {
+      allow get: if isValidId(vaultUid)
+        && isVaultOwner(vaultUid)
+        && existing().ownerUid == request.auth.uid;
+
+      allow list: if false;
+
+      allow create: if isVaultOwner(vaultUid)
+        && isValidId(vaultUid)
+        && isValidVaultProfile(incoming(), vaultUid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVaultOwner(vaultUid)
+        && isValidId(vaultUid)
+        && isValidVaultProfile(incoming(), vaultUid)
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['preferences', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['username', 'usernameLower', 'updatedAt'])
+        );
+
+      allow delete: if isValidId(vaultUid)
+        && isVaultOwner(vaultUid)
+        && existing().ownerUid == request.auth.uid;
+
+      match /folders/{folderId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(folderId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(folderId)
+          && isValidFolder(incoming(), folderId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(folderId)
+          && isValidFolder(incoming(), folderId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'parentId', 'tags', 'isFavorite', 'updatedAt'])
+          )
+          && isMasterVaultMember(vaultUid);
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(folderId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /files/{fileId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(fileId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(fileId)
+          && isValidFile(incoming(), fileId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(fileId)
+          && isValidFile(incoming(), fileId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folderId', 'tags', 'isFavorite', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['chunkCount', 'cloudSynced', 'updatedAt'])
+          )
+          && isMasterVaultMember(vaultUid);
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(fileId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /fileChunks/{chunkId} {
+        allow get: if isValidId(vaultUid)
+          && isValidChunkId(chunkId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidChunkId(chunkId)
+          && isValidFileChunk(incoming(), chunkId)
+          && incoming().createdAt == request.time
+          && isMasterVaultMember(vaultUid)
+          && exists(/databases/$(database)/documents/vaults/$(vaultUid)/files/$(incoming().fileId));
+
+        allow update: if false;
+
+        allow delete: if isValidId(vaultUid)
+          && isValidChunkId(chunkId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /notes/{noteId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(noteId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(noteId)
+          && isValidNote(incoming(), noteId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(noteId)
+          && isValidNote(incoming(), noteId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'folderId', 'tags', 'isFavorite', 'updatedAt'])
+          )
+          && isMasterVaultMember(vaultUid);
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(noteId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /bookmarks/{bookmarkId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(bookmarkId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(bookmarkId)
+          && isValidBookmark(incoming(), bookmarkId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(bookmarkId)
+          && isValidBookmark(incoming(), bookmarkId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['url', 'title', 'description', 'faviconUrl', 'tags', 'isFavorite', 'updatedAt'])
+          )
+          && isMasterVaultMember(vaultUid);
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(bookmarkId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /tags/{tagId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(tagId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(tagId)
+          && isValidTag(incoming(), tagId)
+          && incoming().createdAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if false;
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(tagId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+
+      match /trash/{trashId} {
+        allow get: if isValidId(vaultUid)
+          && isValidId(trashId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow list: if isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+
+        allow create: if isVaultOwner(vaultUid)
+          && isValidId(vaultUid)
+          && isValidId(trashId)
+          && isValidTrash(incoming(), trashId)
+          && incoming().deletedAt == request.time
+          && isMasterVaultMember(vaultUid);
+
+        allow update: if false;
+
+        allow delete: if isValidId(vaultUid)
+          && isValidId(trashId)
+          && isVaultOwner(vaultUid)
+          && existing().ownerUid == request.auth.uid;
+      }
+    }
+  }
+}

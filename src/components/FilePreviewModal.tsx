@@ -47,12 +47,14 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   onSelectFile,
   onExtractZip,
 }) => {
-  const { addToast, user, storage, refreshVaultData } = useVault();
+  const { addToast, user, storage, refreshVaultData, resolveFileBlob } = useVault();
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [textContent, setTextContent] = useState<string | null>(null);
   const [textTruncated, setTextTruncated] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [markdownMode, setMarkdownMode] = useState<'rendered' | 'raw'>('rendered');
+  const [hydratedBlob, setHydratedBlob] = useState<Blob | null>(null);
+  const [hydrating, setHydrating] = useState(false);
 
   // Encrypted preview gate state (never cached across file changes)
   const [decryptedBlob, setDecryptedBlob] = useState<Blob | null>(null);
@@ -66,6 +68,33 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
     setGateRoohKey('');
     setGateError(null);
     setGateBusy(false);
+    setHydratedBlob(null);
+    setHydrating(false);
+
+    if (!file || file.size === 0 || file.content.size > 0) return;
+
+    let cancelled = false;
+    setHydrating(true);
+    resolveFileBlob(file)
+      .then((blob) => {
+        if (!cancelled) setHydratedBlob(blob);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          addToast({
+            type: 'error',
+            title: 'Cloud fetch failed',
+            description: err instanceof Error ? err.message : 'Unable to fetch file chunks.',
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHydrating(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [file?.id]);
 
   useEffect(() => {
@@ -85,7 +114,12 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
       return;
     }
 
-    const activeBlob = file.isEncrypted ? decryptedBlob! : file.content;
+    const activeBlob = file.isEncrypted ? decryptedBlob! : hydratedBlob ?? file.content;
+    if (file.size > 0 && activeBlob.size === 0) {
+      setObjectUrl(null);
+      return;
+    }
+
     const url = URL.createObjectURL(activeBlob);
     setObjectUrl(url);
 
@@ -108,7 +142,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
       cancelled = true;
       URL.revokeObjectURL(url);
     };
-  }, [file, decryptedBlob]);
+  }, [file, decryptedBlob, hydratedBlob]);
 
   const currentIndex = file ? galleryFiles.findIndex((f) => f.id === file.id) : -1;
   const hasPrev = currentIndex > 0;
@@ -132,7 +166,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   const isZip = file.extension === 'zip' || file.mimeType.includes('zip');
   const isMd = isMarkdownFile(file.mimeType, file.name);
   const isText = isTextPreviewable(file.mimeType, file.name);
-  const activeBlob = file.isEncrypted ? decryptedBlob : file.content;
+  const activeBlob = file.isEncrypted ? decryptedBlob : hydratedBlob ?? file.content;
 
   const handleDownload = () => {
     if (file.isEncrypted) {
@@ -157,7 +191,8 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
     setGateError(null);
     setGateBusy(true);
     try {
-      const plainBlob = await decryptBlobWithRoohKey(file.content, file.encryptionMeta, gateRoohKey);
+      const sourceBlob = hydratedBlob ?? (await resolveFileBlob(file));
+      const plainBlob = await decryptBlobWithRoohKey(sourceBlob, file.encryptionMeta, gateRoohKey);
       setDecryptedBlob(plainBlob);
       setGateRoohKey('');
     } catch (err) {

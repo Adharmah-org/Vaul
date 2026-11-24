@@ -93,6 +93,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
     uploadFiles,
     encryptedUploadMode,
     setEncryptedUploadMode,
+    resolveFileBlob,
     addToast,
   } = useVault();
 
@@ -123,20 +124,45 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
   const thumbUrlsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
+    let active = true;
     const nextUrls: Record<string, string> = {};
+    const pendingCloudImages: FileRecord[] = [];
+
     for (const f of files) {
       if (!f.isEncrypted && f.category === 'image' && f.size < 15 * 1024 * 1024) {
-        nextUrls[f.id] = URL.createObjectURL(f.content);
+        if (f.content.size > 0) {
+          nextUrls[f.id] = URL.createObjectURL(f.content);
+        } else if (f.size > 0 && f.size <= 2 * 1024 * 1024) {
+          pendingCloudImages.push(f);
+        }
       }
     }
     Object.values(thumbUrlsRef.current).forEach((u) => URL.revokeObjectURL(u));
     thumbUrlsRef.current = nextUrls;
     setThumbUrls(nextUrls);
 
+    if (pendingCloudImages.length > 0) {
+      Promise.all(
+        pendingCloudImages.map(async (f) => {
+          try {
+            const blob = await resolveFileBlob(f);
+            if (!active || blob.size === 0) return;
+            const url = URL.createObjectURL(blob);
+            nextUrls[f.id] = url;
+            thumbUrlsRef.current = { ...thumbUrlsRef.current, [f.id]: url };
+            setThumbUrls((prev) => ({ ...prev, [f.id]: url }));
+          } catch {
+            // ignore thumbnail hydration failure
+          }
+        })
+      );
+    }
+
     return () => {
+      active = false;
       Object.values(nextUrls).forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [files]);
+  }, [files, resolveFileBlob]);
 
   // Clear selections on section/folder change
   useEffect(() => {
@@ -298,22 +324,31 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
     addToast({ type: 'success', title: 'Updated favorite status' });
   };
 
-  const handleDownloadFile = (file: FileRecord) => {
+  const handleDownloadFile = async (file: FileRecord) => {
     if (file.isEncrypted) {
       setEncryptedDownloadTarget(file);
       return;
     }
-    const url = URL.createObjectURL(file.content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const blob = await resolveFileBlob(file);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Download failed',
+        description: err instanceof Error ? err.message : 'Unable to fetch file.',
+      });
+    }
   };
 
-  const handleOpenStoredZip = (file: FileRecord) => {
+  const handleOpenStoredZip = async (file: FileRecord) => {
     if (file.isEncrypted) {
       setPreviewFile(file);
       addToast({
@@ -323,8 +358,17 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
       });
       return;
     }
-    setZipSource({ blob: file.content, name: file.name });
-    setZipModalOpen(true);
+    try {
+      const blob = await resolveFileBlob(file);
+      setZipSource({ blob, name: file.name });
+      setZipModalOpen(true);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Unable to open ZIP archive',
+        description: err instanceof Error ? err.message : 'Cloud fetch failed.',
+      });
+    }
   };
 
   return (

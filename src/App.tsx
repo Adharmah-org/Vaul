@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthTerminal } from './components/AuthTerminal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { HackerDockShell } from './components/HackerDockShell';
 import { MatrixBackground } from './components/MatrixBackground';
 import { ToastContainer } from './components/ToastContainer';
@@ -58,10 +59,12 @@ const VaultAppRouter: React.FC = () => {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <VaultProvider>
-        <VaultAppRouter />
-      </VaultProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <VaultProvider>
+          <VaultAppRouter />
+        </VaultProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

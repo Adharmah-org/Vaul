@@ -1,0 +1,499 @@
+{
+  "entities": {
+    "VaultProfile": {
+      "title": "VaultProfile",
+      "description": "Cloud-synced rooh.clouds vault profile with PBKDF2-hashed credentials and user preferences.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the vault owner."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9._\\-]+$",
+          "description": "Display handle for the vault operator."
+        },
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9._\\-]+$",
+          "description": "Lowercase normalized handle for case-insensitive matching."
+        },
+        "passwordHash": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 256,
+          "description": "Salted PBKDF2-SHA256 digest of the vault password."
+        },
+        "roohKeyHash": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 256,
+          "description": "Salted PBKDF2-SHA256 digest of the one-time Rooh Key."
+        },
+        "preferences": {
+          "type": "object",
+          "description": "User UI and session preferences map."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the cloud vault was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the cloud vault profile was last updated."
+        }
+      },
+      "required": [
+        "ownerUid",
+        "username",
+        "usernameLower",
+        "passwordHash",
+        "roohKeyHash",
+        "preferences",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultFolder": {
+      "title": "VaultFolder",
+      "description": "Hierarchical folder inside a user's cloud vault.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "parentId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Parent folder ID or null for root."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded list of up to 20 lowercase tags."
+        },
+        "isFavorite": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "name",
+        "parentId",
+        "tags",
+        "isFavorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultFile": {
+      "title": "VaultFile",
+      "description": "Uploaded file metadata record synced across browsers, linked to fileChunks.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "folderId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 20,
+          "enum": ["image", "video", "audio", "document", "archive", "code", "other"]
+        },
+        "extension": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "size": {
+          "type": "number"
+        },
+        "chunkCount": {
+          "type": "number"
+        },
+        "cloudSynced": {
+          "type": "boolean"
+        },
+        "isEncrypted": {
+          "type": "boolean"
+        },
+        "encryptionMeta": {
+          "type": "object"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "isFavorite": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "name",
+        "folderId",
+        "mimeType",
+        "category",
+        "extension",
+        "size",
+        "chunkCount",
+        "cloudSynced",
+        "isEncrypted",
+        "encryptionMeta",
+        "tags",
+        "isFavorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultFileChunk": {
+      "title": "VaultFileChunk",
+      "description": "Base64-encoded binary slice (<= 520,000 chars) of a cloud-synced VaultFile.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fileId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chunkIndex": {
+          "type": "number"
+        },
+        "dataBase64": {
+          "type": "string",
+          "maxLength": 520000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "fileId",
+        "chunkIndex",
+        "dataBase64",
+        "createdAt"
+      ]
+    },
+    "VaultNote": {
+      "title": "VaultNote",
+      "description": "Markdown note stored in the user's cloud vault.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "folderId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "tags": {
+          "type": "array"
+        },
+        "isFavorite": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "title",
+        "content",
+        "folderId",
+        "tags",
+        "isFavorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultBookmark": {
+      "title": "VaultBookmark",
+      "description": "Validated http/https URL bookmark saved in the user's cloud vault.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 2048,
+          "pattern": "^https?://.+"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "faviconUrl": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "tags": {
+          "type": "array"
+        },
+        "isFavorite": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "url",
+        "title",
+        "description",
+        "faviconUrl",
+        "tags",
+        "isFavorite",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultTag": {
+      "title": "VaultTag",
+      "description": "Tag index record in the user's cloud vault.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerUid", "name", "createdAt"]
+    },
+    "VaultTrash": {
+      "title": "VaultTrash",
+      "description": "Soft-deleted item record in the cloud vault trash.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "itemType": {
+          "type": "string",
+          "maxLength": 20,
+          "enum": ["file", "folder", "note", "bookmark"]
+        },
+        "itemId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "size": {
+          "type": "number"
+        },
+        "originalParentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "payload": {
+          "type": "object"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "itemType",
+        "itemId",
+        "title",
+        "size",
+        "originalParentId",
+        "payload",
+        "deletedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/vaults/{vaultUid}": {
+      "schema": { "$ref": "#/entities/VaultProfile" },
+      "description": "Root vault account profile owned by the authenticated user."
+    },
+    "/vaults/{vaultUid}/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/VaultFolder" },
+      "description": "Folders within the user's cloud vault."
+    },
+    "/vaults/{vaultUid}/files/{fileId}": {
+      "schema": { "$ref": "#/entities/VaultFile" },
+      "description": "Files metadata within the user's cloud vault."
+    },
+    "/vaults/{vaultUid}/fileChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/VaultFileChunk" },
+      "description": "Chunked base64 payloads for cloud-synced files."
+    },
+    "/vaults/{vaultUid}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/VaultNote" },
+      "description": "Markdown notes within the user's cloud vault."
+    },
+    "/vaults/{vaultUid}/bookmarks/{bookmarkId}": {
+      "schema": { "$ref": "#/entities/VaultBookmark" },
+      "description": "Validated URL bookmarks within the user's cloud vault."
+    },
+    "/vaults/{vaultUid}/tags/{tagId}": {
+      "schema": { "$ref": "#/entities/VaultTag" },
+      "description": "Tag index entries within the user's cloud vault."
+    },
+    "/vaults/{vaultUid}/trash/{trashId}": {
+      "schema": { "$ref": "#/entities/VaultTrash" },
+      "description": "Soft-deleted items awaiting restore or permanent purge."
+    }
+  }
+}

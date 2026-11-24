@@ -2,8 +2,8 @@ import JSZip from 'jszip';
 import { FileCategory } from '../types/vault';
 import { detectFileCategory, getFileExtension, sanitizeFileName } from './fileUtils';
 
-const MAX_EXTRACTED_FILES = 250;
-const MAX_TOTAL_EXTRACTED_BYTES = 250 * 1024 * 1024; // 250 MB safety cap
+export const MAX_EXTRACTED_FILES = 1000;
+export const MAX_TOTAL_EXTRACTED_BYTES = 1024 * 1024 * 1024; // 1 GB safety cap
 
 const EXT_TO_MIME: Record<string, string> = {
   jpg: 'image/jpeg',
@@ -124,7 +124,7 @@ export async function extractZipArchive(
     const bytes = await entry.async('uint8array');
     totalBytes += bytes.byteLength;
     if (totalBytes > MAX_TOTAL_EXTRACTED_BYTES) {
-      throw new Error('Archive exceeds 250 MB maximum extracted payload safety limit.');
+      throw new Error('Archive exceeds 1 GB maximum extracted payload safety limit.');
     }
 
     const mimeType = inferMimeFromFilename(sanitized.safeFileName);

@@ -4,8 +4,13 @@ import JSZip from 'jszip';
 import {
   extractZipArchive,
   inferMimeFromFilename,
+  MAX_TOTAL_EXTRACTED_BYTES,
   sanitizeZipEntryPath,
 } from './zipExtractor';
+
+test('zip extractor enforces 1 GB maximum extracted payload cap', () => {
+  assert.equal(MAX_TOTAL_EXTRACTED_BYTES, 1024 * 1024 * 1024);
+});
 
 test('sanitizeZipEntryPath prevents zip-slip traversal and filters macOS artifacts', () => {
   assert.equal(sanitizeZipEntryPath('__MACOSX/._photo.jpg'), null);

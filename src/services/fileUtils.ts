@@ -156,6 +156,44 @@ export function normalizeTagInput(tag: string): string {
   return tag.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 32);
 }
 
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
+  }
+  return btoa(parts.join(''));
+}
+
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
+  }
+  return btoa(parts.join(''));
+}
+
+export function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  return arrayBufferToBase64(buffer);
+}
+
+export function base64ToBlob(base64: string, mimeType = 'application/octet-stream'): Blob {
+  const bytes = base64ToUint8Array(base64);
+  return new Blob([bytes as BlobPart], { type: mimeType });
+}
+
 export function sortItems<T extends { name?: string; title?: string; createdAt: number; updatedAt: number; size?: number; category?: string }>(
   items: T[],
   field: SortField,

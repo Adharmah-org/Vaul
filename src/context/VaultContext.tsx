@@ -1,5 +1,8 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
+import { auth, googleProvider } from '../firebase';
 import { generateUuid, normalizeRoohKey } from '../services/crypto';
+import { FirestoreStorageProvider } from '../storage/FirestoreStorageProvider';
 import { IndexedDBStorageProvider } from '../storage/IndexedDBStorageProvider';
 import { StorageProvider } from '../storage/StorageProvider';
 import {
@@ -16,8 +19,23 @@ import {
   VaultPreferences,
 } from '../types/vault';
 
+export type VaultStorageMode = 'cloud' | 'local';
+
+interface CloudProfileStatus {
+  exists: boolean;
+  username?: string;
+}
+
 interface VaultContextValue {
   storage: StorageProvider;
+  storageMode: VaultStorageMode;
+  setStorageMode: (mode: VaultStorageMode) => void;
+  firebaseUser: FirebaseUser | null;
+  cloudProfileStatus: CloudProfileStatus | null;
+  isConnectingCloud: boolean;
+  signInCloudWithGoogle: () => Promise<void>;
+  signOutCloudGoogle: () => Promise<void>;
+
   user: UserRecord | null;
   session: SessionRecord | null;
   preferences: VaultPreferences;
@@ -49,6 +67,7 @@ interface VaultContextValue {
   dismissToast: (id: string) => void;
 
   refreshVaultData: () => Promise<void>;
+  resolveFileBlob: (file: FileRecord) => Promise<Blob>;
   register: (username: string, password: string) => Promise<void>;
   login: (username: string, password: string, roohKey: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -63,6 +82,8 @@ interface VaultContextValue {
   dismissUploadTask: (taskId: string) => void;
 }
 
+const STORAGE_MODE_KEY = 'rooh_storage_mode';
+
 const DEFAULT_PREFERENCES: VaultPreferences = {
   accentMode: 'matrix',
   matrixRain: true,
@@ -74,9 +95,27 @@ const DEFAULT_PREFERENCES: VaultPreferences = {
 
 const VaultContext = createContext<VaultContextValue | null>(null);
 
-const storageSingleton = new IndexedDBStorageProvider();
+const localStorageSingleton = new IndexedDBStorageProvider();
+const cloudStorageSingleton = new FirestoreStorageProvider();
 
 export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [storageMode, setStorageModeState] = useState<VaultStorageMode>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autostart') === '1') return 'local';
+    const saved = localStorage.getItem(STORAGE_MODE_KEY);
+    return saved === 'local' ? 'local' : 'cloud';
+  });
+
+  const storage: StorageProvider = useMemo(
+    () => (storageMode === 'cloud' ? cloudStorageSingleton : localStorageSingleton),
+    [storageMode]
+  );
+
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [cloudProfileStatus, setCloudProfileStatus] = useState<CloudProfileStatus | null>(null);
+  const [isConnectingCloud, setIsConnectingCloud] = useState(false);
+
   const [user, setUser] = useState<UserRecord | null>(null);
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [preferences, setPreferences] = useState<VaultPreferences>(DEFAULT_PREFERENCES);
@@ -85,7 +124,6 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [hasExistingAccount, setHasExistingAccount] = useState(false);
   const [pendingRoohKey, setPendingRoohKey] = useState<string | null>(null);
 
-  // Memory-only Rooh Key for direct encrypted uploads (never written to storage)
   const [sessionRoohKey, setSessionRoohKey] = useState<string | null>(null);
   const [encryptedUploadMode, setEncryptedUploadModeState] = useState(false);
   const [armEncryptedModalOpen, setArmEncryptedModalOpen] = useState(false);
@@ -115,145 +153,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const loadUserWorkspace = useCallback(async (userId: string) => {
-    setIsLoadingData(true);
-    try {
-      const [
-        loadedFolders,
-        loadedFiles,
-        loadedNotes,
-        loadedBookmarks,
-        loadedTags,
-        loadedTrash,
-        loadedPrefs,
-      ] = await Promise.all([
-        storageSingleton.listFolders(userId),
-        storageSingleton.listFiles(userId),
-        storageSingleton.listNotes(userId),
-        storageSingleton.listBookmarks(userId),
-        storageSingleton.listTags(userId),
-        storageSingleton.listTrash(userId),
-        storageSingleton.getPreferences(userId),
-      ]);
-      setFolders(loadedFolders);
-      setFiles(loadedFiles);
-      setNotes(loadedNotes);
-      setBookmarks(loadedBookmarks);
-      setTags(loadedTags);
-      setTrash(loadedTrash);
-      setPreferences(loadedPrefs);
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, []);
-
-  const refreshVaultData = useCallback(async () => {
-    if (!user) return;
-    await loadUserWorkspace(user.id);
-  }, [user, loadUserWorkspace]);
-
-  // Initial session hydration + ?autostart=1 support
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const anyUser = await storageSingleton.hasAnyUser();
-        if (active) setHasExistingAccount(anyUser);
-
-        const activeSession = await storageSingleton.getActiveSession();
-        if (activeSession && active) {
-          setUser(activeSession.user);
-          setSession(activeSession.session);
-          await loadUserWorkspace(activeSession.user.id);
-          return;
-        }
-
-        const params = new URLSearchParams(window.location.search);
-        if (params.get('autostart') === '1') {
-          const demo = await storageSingleton.seedDemoVault();
-          if (active) {
-            setUser(demo.user);
-            setSession(demo.session);
-            setHasExistingAccount(true);
-            await loadUserWorkspace(demo.user.id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to initialize vault session:', err);
-      } finally {
-        if (active) setIsInitializing(false);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [loadUserWorkspace]);
-
-  // Session expiration monitor
-  useEffect(() => {
-    if (!session) return;
-    const interval = setInterval(async () => {
-      if (Date.now() > session.expiresAt) {
-        await storageSingleton.logout(session.id);
-        setUser(null);
-        setSession(null);
-        setPendingRoohKey(null);
-        setSessionRoohKey(null);
-        setEncryptedUploadModeState(false);
-        setArmEncryptedModalOpen(false);
-        pendingEncryptedUploadRef.current = null;
-        setPendingEncryptedUploadCount(0);
-        setFolders([]);
-        setFiles([]);
-        setNotes([]);
-        setBookmarks([]);
-        setTags([]);
-        setTrash([]);
-        addToast({
-          type: 'warning',
-          title: 'Session expired',
-          description: 'Your local vault session timed out. Authenticate to continue.',
-        });
-      }
-    }, 15_000);
-
-    return () => clearInterval(interval);
-  }, [session, addToast]);
-
-  const register = useCallback(
-    async (username: string, password: string) => {
-      const result = await storageSingleton.registerUser(username, password);
-      setHasExistingAccount(true);
-      setPendingRoohKey(result.roohKey);
-      setSessionRoohKey(result.roohKey);
-      setUser(result.user);
-      setSession(result.session);
-      await loadUserWorkspace(result.user.id);
-    },
-    [loadUserWorkspace]
-  );
-
-  const clearPendingRoohKey = useCallback(() => {
-    setPendingRoohKey(null);
-  }, []);
-
-  const login = useCallback(
-    async (username: string, password: string, roohKey: string) => {
-      const result = await storageSingleton.authenticateUser(username, password, roohKey);
-      setPendingRoohKey(null);
-      setSessionRoohKey(normalizeRoohKey(roohKey));
-      setUser(result.user);
-      setSession(result.session);
-      await loadUserWorkspace(result.user.id);
-    },
-    [loadUserWorkspace]
-  );
-
-  const logout = useCallback(async () => {
-    if (session) {
-      await storageSingleton.logout(session.id);
-    }
+  const clearWorkspaceState = useCallback(() => {
     setUser(null);
     setSession(null);
     setPendingRoohKey(null);
@@ -268,22 +168,261 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setBookmarks([]);
     setTags([]);
     setTrash([]);
+  }, []);
+
+  const loadUserWorkspace = useCallback(
+    async (activeStorage: StorageProvider, userId: string) => {
+      setIsLoadingData(true);
+      try {
+        const [
+          loadedFolders,
+          loadedFiles,
+          loadedNotes,
+          loadedBookmarks,
+          loadedTags,
+          loadedTrash,
+          loadedPrefs,
+        ] = await Promise.all([
+          activeStorage.listFolders(userId),
+          activeStorage.listFiles(userId),
+          activeStorage.listNotes(userId),
+          activeStorage.listBookmarks(userId),
+          activeStorage.listTags(userId),
+          activeStorage.listTrash(userId),
+          activeStorage.getPreferences(userId),
+        ]);
+        setFolders(loadedFolders);
+        setFiles(loadedFiles);
+        setNotes(loadedNotes);
+        setBookmarks(loadedBookmarks);
+        setTags(loadedTags);
+        setTrash(loadedTrash);
+        setPreferences(loadedPrefs);
+      } finally {
+        setIsLoadingData(false);
+      }
+    },
+    []
+  );
+
+  const refreshVaultData = useCallback(async () => {
+    if (!user) return;
+    await loadUserWorkspace(storage, user.id);
+  }, [storage, user, loadUserWorkspace]);
+
+  const resolveFileBlob = useCallback(
+    async (file: FileRecord): Promise<Blob> => {
+      if (storage.resolveFileBlob && file.size > 0 && file.content.size === 0) {
+        return storage.resolveFileBlob(file.userId, file);
+      }
+      return file.content;
+    },
+    [storage]
+  );
+
+  // Firebase Auth listener
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      setFirebaseUser(fbUser);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Session hydration when authReady or storageMode changes
+  useEffect(() => {
+    if (!authReady) return;
+    let active = true;
+
+    (async () => {
+      setIsInitializing(true);
+      try {
+        const params = new URLSearchParams(window.location.search);
+
+        if (storageMode === 'local') {
+          setCloudProfileStatus(null);
+          const anyUser = await localStorageSingleton.hasAnyUser();
+          if (active) setHasExistingAccount(anyUser);
+
+          const activeSession = await localStorageSingleton.getActiveSession();
+          if (activeSession && active) {
+            setUser(activeSession.user);
+            setSession(activeSession.session);
+            await loadUserWorkspace(localStorageSingleton, activeSession.user.id);
+            return;
+          }
+
+          if (params.get('autostart') === '1') {
+            const demo = await localStorageSingleton.seedDemoVault();
+            if (active) {
+              setUser(demo.user);
+              setSession(demo.session);
+              setHasExistingAccount(true);
+              await loadUserWorkspace(localStorageSingleton, demo.user.id);
+            }
+            return;
+          }
+
+          if (active) clearWorkspaceState();
+          return;
+        }
+
+        // Cloud Mode
+        if (!firebaseUser) {
+          if (active) {
+            setCloudProfileStatus(null);
+            setHasExistingAccount(false);
+            clearWorkspaceState();
+          }
+          return;
+        }
+
+        const status = await cloudStorageSingleton.getCloudVaultStatus(firebaseUser.uid);
+        if (!active) return;
+        setCloudProfileStatus(status);
+        setHasExistingAccount(status.exists);
+
+        const activeCloudSession = await cloudStorageSingleton.getActiveSession();
+        if (activeCloudSession && active) {
+          setUser(activeCloudSession.user);
+          setSession(activeCloudSession.session);
+          await loadUserWorkspace(cloudStorageSingleton, activeCloudSession.user.id);
+        } else if (active) {
+          clearWorkspaceState();
+        }
+      } catch (err) {
+        console.error('Failed to initialize vault session:', err);
+      } finally {
+        if (active) setIsInitializing(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [authReady, storageMode, firebaseUser, loadUserWorkspace, clearWorkspaceState]);
+
+  // Session expiration monitor
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(async () => {
+      if (Date.now() > session.expiresAt) {
+        await storage.logout(session.id);
+        clearWorkspaceState();
+        addToast({
+          type: 'warning',
+          title: 'Session expired',
+          description: 'Your vault session timed out. Authenticate to continue.',
+        });
+      }
+    }, 15_000);
+
+    return () => clearInterval(interval);
+  }, [session, storage, clearWorkspaceState, addToast]);
+
+  const setStorageMode = useCallback(
+    (mode: VaultStorageMode) => {
+      if (mode === storageMode) return;
+      localStorage.setItem(STORAGE_MODE_KEY, mode);
+      clearWorkspaceState();
+      setStorageModeState(mode);
+    },
+    [storageMode, clearWorkspaceState]
+  );
+
+  const signInCloudWithGoogle = useCallback(async () => {
+    setIsConnectingCloud(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+      addToast({
+        type: 'success',
+        title: 'Google identity connected',
+        description: 'Enter your Cloud Vault details or initialize a new vault.',
+      });
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/popup-closed-by-user') {
+        throw new Error('Google sign-in popup was closed before completing.');
+      }
+      if (code === 'auth/popup-blocked') {
+        throw new Error('Browser blocked the Google sign-in popup. Allow popups for this site and try again.');
+      }
+      throw err instanceof Error ? err : new Error('Failed to connect Google account.');
+    } finally {
+      setIsConnectingCloud(false);
+    }
+  }, [addToast]);
+
+  const signOutCloudGoogle = useCallback(async () => {
+    if (session) {
+      await storage.logout(session.id);
+    }
+    await signOut(auth);
+    setCloudProfileStatus(null);
+    clearWorkspaceState();
+    addToast({
+      type: 'info',
+      title: 'Cloud identity disconnected',
+      description: 'Signed out of Google session on this browser.',
+    });
+  }, [session, storage, clearWorkspaceState, addToast]);
+
+  const register = useCallback(
+    async (username: string, password: string) => {
+      const result = await storage.registerUser(username, password);
+      setHasExistingAccount(true);
+      if (storageMode === 'cloud') {
+        setCloudProfileStatus({ exists: true, username: result.user.username });
+      }
+      setPendingRoohKey(result.roohKey);
+      setSessionRoohKey(result.roohKey);
+      setUser(result.user);
+      setSession(result.session);
+      await loadUserWorkspace(storage, result.user.id);
+    },
+    [storage, storageMode, loadUserWorkspace]
+  );
+
+  const clearPendingRoohKey = useCallback(() => {
+    setPendingRoohKey(null);
+  }, []);
+
+  const login = useCallback(
+    async (username: string, password: string, roohKey: string) => {
+      const result = await storage.authenticateUser(username, password, roohKey);
+      setPendingRoohKey(null);
+      setSessionRoohKey(normalizeRoohKey(roohKey));
+      setUser(result.user);
+      setSession(result.session);
+      await loadUserWorkspace(storage, result.user.id);
+    },
+    [storage, loadUserWorkspace]
+  );
+
+  const logout = useCallback(async () => {
+    if (session) {
+      await storage.logout(session.id);
+    }
+    clearWorkspaceState();
     addToast({
       type: 'info',
       title: 'Vault locked',
-      description: 'Local session terminated.',
+      description:
+        storageMode === 'cloud'
+          ? 'Cloud Vault session locked on this browser.'
+          : 'Local session terminated.',
     });
-  }, [session, addToast]);
+  }, [session, storage, storageMode, clearWorkspaceState, addToast]);
 
   const updatePreferences = useCallback(
     async (next: Partial<VaultPreferences>) => {
       const merged = { ...preferences, ...next };
       setPreferences(merged);
       if (user) {
-        await storageSingleton.savePreferences(user.id, merged);
+        await storage.savePreferences(user.id, merged);
       }
     },
-    [preferences, user]
+    [preferences, user, storage]
   );
 
   const executeUploadBatch = useCallback(
@@ -315,7 +454,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
 
         try {
-          await storageSingleton.uploadFile(user.id, file, folderId, {
+          await storage.uploadFile(user.id, file, folderId, {
             signal: controller.signal,
             roohKey: activeRoohKey,
             onProgress: (percent) => {
@@ -360,12 +499,14 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             ? `Encrypted & uploaded ${successCount} ${successCount === 1 ? 'file' : 'files'}`
             : `Uploaded ${successCount} ${successCount === 1 ? 'file' : 'files'}`,
           description: isEncrypted
-            ? 'AES-256-GCM ciphertext stored in IndexedDB. Rooh Key required after download.'
+            ? 'AES-256-GCM ciphertext stored. Rooh Key required after download.'
+            : storageMode === 'cloud'
+            ? 'Synced to Cloud Firestore Vault across browsers.'
             : 'Saved as IndexedDB Blob in your local vault.',
         });
       }
     },
-    [user, refreshVaultData, addToast]
+    [user, storage, storageMode, refreshVaultData, addToast]
   );
 
   const uploadFiles = useCallback(
@@ -416,7 +557,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error('Authenticate first to arm Encrypted Mode.');
       }
       const normalized = normalizeRoohKey(roohKeyInput);
-      const valid = await storageSingleton.verifyRoohKey(user.id, normalized);
+      const valid = await storage.verifyRoohKey(user.id, normalized);
       if (!valid) {
         throw new Error('Invalid Rooh Key. Unable to arm Encrypted Mode.');
       }
@@ -439,7 +580,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }
     },
-    [user, executeUploadBatch, addToast]
+    [user, storage, executeUploadBatch, addToast]
   );
 
   const cancelUpload = useCallback((taskId: string) => {
@@ -460,7 +601,14 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <VaultContext.Provider
       value={{
-        storage: storageSingleton,
+        storage,
+        storageMode,
+        setStorageMode,
+        firebaseUser,
+        cloudProfileStatus,
+        isConnectingCloud,
+        signInCloudWithGoogle,
+        signOutCloudGoogle,
         user,
         session,
         preferences,
@@ -488,6 +636,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         addToast,
         dismissToast,
         refreshVaultData,
+        resolveFileBlob,
         register,
         login,
         logout,

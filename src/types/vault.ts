@@ -91,6 +91,8 @@ export interface FileRecord {
   content: Blob;
   isEncrypted?: boolean;
   encryptionMeta?: FileEncryptionMeta;
+  cloudSynced?: boolean;
+  chunkCount?: number;
   tags: string[];
   isFavorite: boolean;
   createdAt: number;
