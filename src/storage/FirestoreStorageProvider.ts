@@ -146,16 +146,11 @@ export class FirestoreStorageProvider implements StorageProvider {
     return status.exists;
   }
 
-  async registerUser(username: string, password: string): Promise<RegisterResult> {
+  async registerUser(username: string): Promise<RegisterResult> {
     const uid = requireVerifiedUid();
     const uCheck = validateUsername(username);
     if (!uCheck.valid) {
       throw new Error(uCheck.error || 'Invalid username.');
-    }
-
-    const pCheck = validatePasswordStrength(password);
-    if (!pCheck.valid) {
-      throw new Error(pCheck.errors.join('. '));
     }
 
     const path = `vaults/${uid}`;
@@ -171,7 +166,6 @@ export class FirestoreStorageProvider implements StorageProvider {
 
     const cleanUsername = username.trim();
     const roohKey = generateRoohKey();
-    const passwordHash = await hashSecret(password);
     const roohKeyHash = await hashSecret(roohKey);
 
     try {
@@ -179,7 +173,6 @@ export class FirestoreStorageProvider implements StorageProvider {
         ownerUid: uid,
         username: cleanUsername,
         usernameLower: cleanUsername.toLowerCase(),
-        passwordHash,
         roohKeyHash,
         preferences: DEFAULT_PREFERENCES,
         createdAt: serverTimestamp(),
@@ -193,7 +186,6 @@ export class FirestoreStorageProvider implements StorageProvider {
     const user: UserRecord = {
       id: uid,
       username: cleanUsername,
-      passwordHash,
       roohKeyHash,
       createdAt: now,
       updatedAt: now,
@@ -212,7 +204,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     return { user, roohKey, session };
   }
 
-  async authenticateUser(username: string, password: string, roohKey: string): Promise<LoginResult> {
+  async authenticateUser(username: string, roohKey: string): Promise<LoginResult> {
     const uid = requireVerifiedUid();
     const cleanUsernameLower = username.trim().toLowerCase();
     const normalizedKey = normalizeRoohKey(roohKey);
@@ -231,14 +223,13 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
 
     if (!data || String(data.usernameLower || '') !== cleanUsernameLower) {
-      throw new Error('ACCESS DENIED: Invalid username, password, or Rooh Key.');
+      throw new Error('ACCESS DENIED: Invalid username or Rooh Key.');
     }
 
-    const passwordOk = await verifySecret(password, String(data.passwordHash || ''));
     const keyOk = await verifySecret(normalizedKey, String(data.roohKeyHash || ''));
 
-    if (!passwordOk || !keyOk) {
-      throw new Error('ACCESS DENIED: Invalid username, password, or Rooh Key.');
+    if (!keyOk) {
+      throw new Error('ACCESS DENIED: Invalid Rooh Key.');
     }
 
     const prefs = (data.preferences as VaultPreferences | undefined) || DEFAULT_PREFERENCES;
@@ -248,7 +239,6 @@ export class FirestoreStorageProvider implements StorageProvider {
     const user: UserRecord = {
       id: uid,
       username: String(data.username),
-      passwordHash: String(data.passwordHash),
       roohKeyHash: String(data.roohKeyHash),
       createdAt: toMillis(data.createdAt),
       updatedAt: toMillis(data.updatedAt),
@@ -311,7 +301,6 @@ export class FirestoreStorageProvider implements StorageProvider {
       const user: UserRecord = {
         id: current.uid,
         username: String(data.username),
-        passwordHash: String(data.passwordHash),
         roohKeyHash: String(data.roohKeyHash),
         createdAt: toMillis(data.createdAt),
         updatedAt: toMillis(data.updatedAt),
@@ -330,56 +319,54 @@ export class FirestoreStorageProvider implements StorageProvider {
     this.blobCache.clear();
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  async rotateRoohKey(userId: string, currentRoohKeyInput: string): Promise<string> {
     const uid = requireVerifiedUid(userId);
     const path = `vaults/${uid}`;
     let currentHash = '';
     try {
       const snap = await getDoc(this.vaultRef(uid));
       if (!snap.exists()) throw new Error('Account not found.');
-      currentHash = String(snap.data().passwordHash || '');
+      currentHash = String(snap.data().roohKeyHash || '');
     } catch (error) {
       if (error instanceof Error && error.message === 'Account not found.') throw error;
       handleFirestoreError(error, OperationType.GET, path);
     }
 
-    const ok = await verifySecret(currentPassword, currentHash);
+    const ok = await verifySecret(normalizeRoohKey(currentRoohKeyInput), currentHash);
     if (!ok) {
-      throw new Error('Current password is incorrect.');
+      throw new Error('Current Rooh Key is incorrect.');
     }
 
-    const strength = validatePasswordStrength(newPassword);
-    if (!strength.valid) {
-      throw new Error(strength.errors.join('. '));
-    }
-
-    const newHash = await hashSecret(newPassword);
+    const newKey = generateRoohKey();
+    const newHash = await hashSecret(newKey);
     try {
       await updateDoc(this.vaultRef(uid), {
-        passwordHash: newHash,
+        roohKeyHash: newHash,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
+
+    return newKey;
   }
 
-  async deleteAccount(userId: string, password: string): Promise<void> {
+  async deleteAccount(userId: string, roohKeyInput: string): Promise<void> {
     const uid = requireVerifiedUid(userId);
     const path = `vaults/${uid}`;
     let currentHash = '';
     try {
       const snap = await getDoc(this.vaultRef(uid));
       if (!snap.exists()) throw new Error('Account not found.');
-      currentHash = String(snap.data().passwordHash || '');
+      currentHash = String(snap.data().roohKeyHash || '');
     } catch (error) {
       if (error instanceof Error && error.message === 'Account not found.') throw error;
       handleFirestoreError(error, OperationType.GET, path);
     }
 
-    const ok = await verifySecret(password, currentHash);
+    const ok = await verifySecret(normalizeRoohKey(roohKeyInput), currentHash);
     if (!ok) {
-      throw new Error('Password verification failed. Cloud Vault was not deleted.');
+      throw new Error('Rooh Key verification failed. Cloud Vault was not deleted.');
     }
 
     const subcollections = ['fileChunks', 'files', 'folders', 'notes', 'bookmarks', 'tags', 'trash'];

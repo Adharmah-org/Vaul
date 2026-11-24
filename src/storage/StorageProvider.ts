@@ -35,13 +35,13 @@ export interface StorageProvider {
 
   // Auth & Session
   hasAnyUser(): Promise<boolean>;
-  registerUser(username: string, password: string): Promise<RegisterResult>;
-  authenticateUser(username: string, password: string, roohKey: string): Promise<LoginResult>;
+  registerUser(username: string): Promise<RegisterResult>;
+  authenticateUser(username: string, roohKey: string): Promise<LoginResult>;
   verifyRoohKey(userId: string, roohKey: string): Promise<boolean>;
   getActiveSession(): Promise<{ session: SessionRecord; user: UserRecord } | null>;
   logout(sessionId: string): Promise<void>;
-  changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void>;
-  deleteAccount(userId: string, password: string): Promise<void>;
+  rotateRoohKey(userId: string, currentRoohKey: string): Promise<string>;
+  deleteAccount(userId: string, roohKey: string): Promise<void>;
   seedDemoVault(): Promise<LoginResult>;
 
   // Folders

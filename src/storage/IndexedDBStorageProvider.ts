@@ -110,16 +110,11 @@ export class IndexedDBStorageProvider implements StorageProvider {
     return count > 0;
   }
 
-  async registerUser(usernameInput: string, password: string): Promise<RegisterResult> {
+  async registerUser(usernameInput: string): Promise<RegisterResult> {
     const username = usernameInput.trim();
     const userCheck = validateUsername(username);
     if (!userCheck.valid) {
       throw new Error(userCheck.error || 'Invalid username.');
-    }
-
-    const passCheck = validatePasswordStrength(password);
-    if (!passCheck.valid) {
-      throw new Error(passCheck.errors.join('. '));
     }
 
     const existing = await db.users
@@ -130,16 +125,12 @@ export class IndexedDBStorageProvider implements StorageProvider {
     }
 
     const roohKey = generateRoohKey();
-    const [passwordHash, roohKeyHash] = await Promise.all([
-      hashSecret(password),
-      hashSecret(roohKey),
-    ]);
+    const roohKeyHash = await hashSecret(roohKey);
 
     const now = Date.now();
     const user: UserRecord = {
       id: generateUuid(),
       username,
-      passwordHash,
       roohKeyHash,
       createdAt: now,
       updatedAt: now,
@@ -164,12 +155,12 @@ export class IndexedDBStorageProvider implements StorageProvider {
     return { user, roohKey, session };
   }
 
-  async authenticateUser(usernameInput: string, password: string, roohKeyInput: string): Promise<LoginResult> {
+  async authenticateUser(usernameInput: string, roohKeyInput: string): Promise<LoginResult> {
     const username = usernameInput.trim();
     const roohKey = normalizeRoohKey(roohKeyInput);
 
-    if (!username || !password || !roohKey) {
-      throw new Error('Username, password, and Rooh Key are required.');
+    if (!username || !roohKey) {
+      throw new Error('Username and Rooh Key are required.');
     }
 
     if (!isValidRoohKeyFormat(roohKey)) {
@@ -184,13 +175,10 @@ export class IndexedDBStorageProvider implements StorageProvider {
       throw new Error('ACCESS DENIED: Credentials do not match any local vault.');
     }
 
-    const [passwordOk, keyOk] = await Promise.all([
-      verifySecret(password, user.passwordHash),
-      verifySecret(roohKey, user.roohKeyHash),
-    ]);
+    const keyOk = await verifySecret(roohKey, user.roohKeyHash);
 
-    if (!passwordOk || !keyOk) {
-      throw new Error('ACCESS DENIED: Invalid password or Rooh Key.');
+    if (!keyOk) {
+      throw new Error('ACCESS DENIED: Invalid Rooh Key.');
     }
 
     const prefs = await this.getPreferences(user.id);
@@ -260,34 +248,32 @@ export class IndexedDBStorageProvider implements StorageProvider {
     sessionStorage.removeItem(ACTIVE_SESSION_ID_KEY);
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  async rotateRoohKey(userId: string, currentRoohKeyInput: string): Promise<string> {
     const user = await db.users.get(userId);
     if (!user) throw new Error('Account not found.');
 
-    const currentOk = await verifySecret(currentPassword, user.passwordHash);
+    const currentOk = await verifySecret(normalizeRoohKey(currentRoohKeyInput), user.roohKeyHash);
     if (!currentOk) {
-      throw new Error('Current password is incorrect.');
+      throw new Error('Current Rooh Key is incorrect.');
     }
 
-    const strength = validatePasswordStrength(newPassword);
-    if (!strength.valid) {
-      throw new Error(strength.errors.join('. '));
-    }
-
-    const newHash = await hashSecret(newPassword);
+    const newKey = generateRoohKey();
+    const newHash = await hashSecret(newKey);
     await db.users.update(userId, {
-      passwordHash: newHash,
+      roohKeyHash: newHash,
       updatedAt: Date.now(),
     });
+
+    return newKey;
   }
 
-  async deleteAccount(userId: string, password: string): Promise<void> {
+  async deleteAccount(userId: string, roohKeyInput: string): Promise<void> {
     const user = await db.users.get(userId);
     if (!user) throw new Error('Account not found.');
 
-    const ok = await verifySecret(password, user.passwordHash);
+    const ok = await verifySecret(normalizeRoohKey(roohKeyInput), user.roohKeyHash);
     if (!ok) {
-      throw new Error('Password verification failed. Account was not deleted.');
+      throw new Error('Rooh Key verification failed. Account was not deleted.');
     }
 
     await db.transaction(
@@ -326,7 +312,7 @@ export class IndexedDBStorageProvider implements StorageProvider {
       return { user: existing, session };
     }
 
-    const reg = await this.registerUser('ghost_operator', 'RoohVault2026!');
+    const reg = await this.registerUser('ghost_operator');
     const userId = reg.user.id;
     const folder = await this.createFolder(userId, 'Field Archives', null);
 

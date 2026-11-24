@@ -28,7 +28,6 @@ export type ViewMode = 'grid' | 'list';
 export interface UserRecord {
   id: string;
   username: string;
-  passwordHash: string;
   roohKeyHash: string;
   createdAt: number;
   updatedAt: number;

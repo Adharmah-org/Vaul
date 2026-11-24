@@ -50,8 +50,8 @@ interface VaultContextValue {
 
   refreshVaultData: () => Promise<void>;
   resolveFileBlob: (file: FileRecord) => Promise<Blob>;
-  register: (username: string, password: string) => Promise<void>;
-  login: (username: string, password: string, roohKey: string) => Promise<void>;
+  register: (username: string) => Promise<void>;
+  login: (username: string, roohKey: string) => Promise<void>;
   logout: () => Promise<void>;
   updatePreferences: (next: Partial<VaultPreferences>) => Promise<void>;
 
@@ -226,8 +226,8 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [session, addToast]);
 
   const register = useCallback(
-    async (username: string, password: string) => {
-      const result = await storageSingleton.registerUser(username, password);
+    async (username: string) => {
+      const result = await storageSingleton.registerUser(username);
       setHasExistingAccount(true);
       setPendingRoohKey(result.roohKey);
       setSessionRoohKey(result.roohKey);
@@ -243,8 +243,8 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const login = useCallback(
-    async (username: string, password: string, roohKey: string) => {
-      const result = await storageSingleton.authenticateUser(username, password, roohKey);
+    async (username: string, roohKey: string) => {
+      const result = await storageSingleton.authenticateUser(username, roohKey);
       setPendingRoohKey(null);
       setSessionRoohKey(normalizeRoohKey(roohKey));
       setUser(result.user);

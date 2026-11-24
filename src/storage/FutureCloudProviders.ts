@@ -37,7 +37,7 @@ export class FutureCloudflareR2StorageProvider implements StorageProvider {
   async verifyRoohKey(): Promise<boolean> { return notConfigured(this.providerName, 'verifyRoohKey'); }
   async getActiveSession(): Promise<{ session: SessionRecord; user: UserRecord } | null> { return null; }
   async logout(): Promise<void> { return notConfigured(this.providerName, 'logout'); }
-  async changePassword(): Promise<void> { return notConfigured(this.providerName, 'changePassword'); }
+  async rotateRoohKey(): Promise<string> { return notConfigured(this.providerName, 'rotateRoohKey'); }
   async deleteAccount(): Promise<void> { return notConfigured(this.providerName, 'deleteAccount'); }
   async seedDemoVault(): Promise<LoginResult> { return notConfigured(this.providerName, 'seedDemoVault'); }
   async listFolders(): Promise<FolderRecord[]> { return notConfigured(this.providerName, 'listFolders'); }
@@ -97,7 +97,7 @@ export class FutureSupabaseStorageProvider implements StorageProvider {
   async verifyRoohKey(): Promise<boolean> { return notConfigured(this.providerName, 'verifyRoohKey'); }
   async getActiveSession(): Promise<{ session: SessionRecord; user: UserRecord } | null> { return null; }
   async logout(): Promise<void> { return notConfigured(this.providerName, 'logout'); }
-  async changePassword(): Promise<void> { return notConfigured(this.providerName, 'changePassword'); }
+  async rotateRoohKey(): Promise<string> { return notConfigured(this.providerName, 'rotateRoohKey'); }
   async deleteAccount(): Promise<void> { return notConfigured(this.providerName, 'deleteAccount'); }
   async seedDemoVault(): Promise<LoginResult> { return notConfigured(this.providerName, 'seedDemoVault'); }
   async listFolders(): Promise<FolderRecord[]> { return notConfigured(this.providerName, 'listFolders'); }

@@ -64,10 +64,7 @@ export const AuthTerminal: React.FC = () => {
 
   // Form states
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [roohKey, setRoohKey] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -81,7 +78,6 @@ export const AuthTerminal: React.FC = () => {
   const [keySavedConfirmed, setKeySavedConfirmed] = useState(false);
   const [unlockerOpen, setUnlockerOpen] = useState(false);
 
-  const passwordValidation = useMemo(() => validatePasswordStrength(password), [password]);
   const usernameValidation = useMemo(() => validateUsername(username), [username]);
 
   const handleCopyKey = async () => {
@@ -157,20 +153,10 @@ export const AuthTerminal: React.FC = () => {
       setErrorMsg(usernameValidation.error || 'Invalid username.');
       return;
     }
-    if (!passwordValidation.valid) {
-      setErrorMsg(passwordValidation.errors.join('. '));
-      return;
-    }
-    if (password !== confirmPassword) {
-      setErrorMsg('Passwords do not match.');
-      return;
-    }
 
     setIsSubmitting(true);
     try {
-      await register(username, password);
-      setPassword('');
-      setConfirmPassword('');
+      await register(username);
       setKeySavedConfirmed(false);
       addToast({
         type: 'success',
@@ -199,7 +185,7 @@ export const AuthTerminal: React.FC = () => {
         await new Promise((r) => setTimeout(r, stepDelay));
       }
 
-      await login(username, password, roohKey);
+      await login(username, roohKey);
 
       setTerminalLines((prev) => [...prev, TERMINAL_STEPS[4], 'ACCESS GRANTED']);
       setAuthStatus('granted');
@@ -448,32 +434,6 @@ export const AuthTerminal: React.FC = () => {
               </div>
 
               <div>
-                <label htmlFor="login-password" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="login-password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter vault password"
-                    className="w-full bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3.5 py-2.5 pr-10 text-sm text-[#E6F1EE] placeholder:text-[#4F615C]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((s) => !s)}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#6E827D] hover:text-[#E6F1EE]"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
                 <label htmlFor="login-rooh-key" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
                   Rooh Key
                 </label>
@@ -517,68 +477,9 @@ export const AuthTerminal: React.FC = () => {
                 )}
               </div>
 
-              <div>
-                <label htmlFor="signup-password" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="signup-password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="new-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 8 chars, mixed case + number/symbol"
-                    className="w-full bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3.5 py-2.5 pr-10 text-sm text-[#E6F1EE] placeholder:text-[#4F615C]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((s) => !s)}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#6E827D] hover:text-[#E6F1EE]"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                {password.length > 0 && (
-                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] font-sans-ui">
-                    <span className={password.length >= 8 ? 'text-[#39FF88]' : 'text-[#6E827D]'}>
-                      • 8+ characters
-                    </span>
-                    <span className={/[A-Z]/.test(password) ? 'text-[#39FF88]' : 'text-[#6E827D]'}>
-                      • Uppercase (A-Z)
-                    </span>
-                    <span className={/[a-z]/.test(password) ? 'text-[#39FF88]' : 'text-[#6E827D]'}>
-                      • Lowercase (a-z)
-                    </span>
-                    <span
-                      className={
-                        /[0-9!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)
-                          ? 'text-[#39FF88]'
-                          : 'text-[#6E827D]'
-                      }
-                    >
-                      • Number or symbol
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label htmlFor="signup-confirm" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
-                  Confirm Password
-                </label>
-                <input
-                  id="signup-confirm"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter password"
-                  className="w-full bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3.5 py-2.5 text-sm text-[#E6F1EE] placeholder:text-[#4F615C]"
-                />
+              <div className="p-3 bg-white/5 border border-white/10 rounded-lg text-xs text-[#A3B5B0]">
+                <p className="text-[#39FF88] font-medium mb-1">Rooh Key Generation</p>
+                A secure <code className="text-[#00E5FF]">ROOH-XXXX-XXXX-XXXX</code> key will be generated instantly upon creation to secure your vault.
               </div>
 
               <button

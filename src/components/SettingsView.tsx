@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   Download,
+  Key,
   Keyboard,
   Lock,
   LogOut,
@@ -32,11 +33,10 @@ export const SettingsView: React.FC = () => {
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Change password
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [pwBusy, setPwBusy] = useState(false);
+  // Rotate Rooh Key
+  const [currentRoohKey, setCurrentRoohKey] = useState('');
+  const [rotatedKeyResult, setRotatedKeyResult] = useState<string | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
 
   // Archive export/import
   const [exportBusy, setExportBusy] = useState(false);
@@ -44,32 +44,28 @@ export const SettingsView: React.FC = () => {
 
   // Delete account modal
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteRoohKey, setDeleteRoohKey] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   if (!user || !session) return null;
 
-  const handleChangePassword = async (e: React.FormEvent) => {
+  const handleRotateRoohKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword !== confirmNewPassword) {
-      addToast({ type: 'error', title: 'New passwords do not match' });
-      return;
-    }
-    setPwBusy(true);
+    setKeyBusy(true);
+    setRotatedKeyResult(null);
     try {
-      await storage.changePassword(user.id, currentPassword, newPassword);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmNewPassword('');
-      addToast({ type: 'success', title: 'Password updated successfully' });
+      const newKey = await storage.rotateRoohKey(user.id, currentRoohKey);
+      setCurrentRoohKey('');
+      setRotatedKeyResult(newKey);
+      addToast({ type: 'success', title: 'Rooh Key rotated successfully' });
     } catch (err) {
       addToast({
         type: 'error',
-        title: 'Password change failed',
-        description: err instanceof Error ? err.message : 'Unable to update password.',
+        title: 'Key rotation failed',
+        description: err instanceof Error ? err.message : 'Unable to rotate Rooh Key.',
       });
     } finally {
-      setPwBusy(false);
+      setKeyBusy(false);
     }
   };
 
@@ -143,13 +139,13 @@ export const SettingsView: React.FC = () => {
     e.preventDefault();
     setDeleteBusy(true);
     try {
-      await storage.deleteAccount(user.id, deletePassword);
+      await storage.deleteAccount(user.id, deleteRoohKey);
       window.location.reload();
     } catch (err) {
       addToast({
         type: 'error',
         title: 'Deletion failed',
-        description: err instanceof Error ? err.message : 'Invalid password.',
+        description: err instanceof Error ? err.message : 'Invalid Rooh Key.',
       });
       setDeleteBusy(false);
     }
@@ -334,51 +330,46 @@ export const SettingsView: React.FC = () => {
         </div>
       </section>
 
-      {/* Change Password */}
+      {/* Rotate Rooh Key */}
       <section className="bg-[#090D0D] border border-white/10 rounded-xl p-5 space-y-4">
         <div className="flex items-center gap-2.5">
-          <Lock className="w-4 h-4 text-[#39FF88]" />
-          <h2 className="text-sm font-semibold text-[#E6F1EE]">Change Password</h2>
+          <Key className="w-4 h-4 text-[#39FF88]" />
+          <h2 className="text-sm font-semibold text-[#E6F1EE]">Rotate Rooh Key</h2>
         </div>
+        <p className="text-xs text-[#8A9D98] font-sans-ui">
+          Enter your current Rooh Key to generate a brand new secure recovery key.
+        </p>
 
-        <form onSubmit={handleChangePassword} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <input
-            type="password"
-            required
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            placeholder="Current password"
-            aria-label="Current password"
-            className="bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#E6F1EE]"
-          />
-          <input
-            type="password"
-            required
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder="New strong password"
-            aria-label="New password"
-            className="bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#E6F1EE]"
-          />
+        <form onSubmit={handleRotateRoohKey} className="space-y-3">
           <div className="flex gap-2">
             <input
-              type="password"
+              type="text"
               required
-              value={confirmNewPassword}
-              onChange={(e) => setConfirmNewPassword(e.target.value)}
-              placeholder="Confirm new"
-              aria-label="Confirm new password"
-              className="flex-1 min-w-0 bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#E6F1EE]"
+              value={currentRoohKey}
+              onChange={(e) => setCurrentRoohKey(e.target.value.toUpperCase())}
+              placeholder="ROOH-XXXX-XXXX-XXXX"
+              aria-label="Current Rooh Key"
+              className="flex-1 bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#00E5FF] tracking-wider"
             />
             <button
               type="submit"
-              disabled={pwBusy}
+              disabled={keyBusy}
               className="px-4 py-2 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg hover:bg-[#52FF99] shrink-0"
             >
-              {pwBusy ? 'Updating...' : 'Update'}
+              {keyBusy ? 'Rotating...' : 'Rotate Key'}
             </button>
           </div>
         </form>
+
+        {rotatedKeyResult && (
+          <div className="p-3.5 bg-[#39FF88]/10 border border-[#39FF88]/30 rounded-lg space-y-2">
+            <p className="text-xs font-semibold text-[#39FF88]">New Rooh Key Generated Successfully:</p>
+            <div className="p-2.5 bg-[#030505] border border-white/15 rounded font-mono text-sm text-[#00E5FF] tracking-wider select-all">
+              {rotatedKeyResult}
+            </div>
+            <p className="text-[11px] text-[#A3B5B0]">Save this key immediately. It will not be shown again.</p>
+          </div>
+        )}
       </section>
 
       {/* Keyboard Shortcuts */}
@@ -413,10 +404,10 @@ export const SettingsView: React.FC = () => {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm font-semibold text-red-400">
             <AlertTriangle className="w-4 h-4" />
-            <span>Delete Local Vault Account</span>
+            <span>Delete Vault Account</span>
           </div>
           <p className="text-xs text-[#8A9D98] font-sans-ui">
-            Permanently erases your user record, files, folders, notes, bookmarks, and trash from IndexedDB.
+            Permanently erases your user record, files, folders, notes, bookmarks, and trash from storage.
           </p>
         </div>
         <button
@@ -436,17 +427,17 @@ export const SettingsView: React.FC = () => {
       >
         <form onSubmit={handleDeleteAccount} className="space-y-4">
           <p className="text-xs text-[#A3B5B0] font-sans-ui leading-relaxed">
-            This action permanently wipes all local IndexedDB records for{' '}
-            <strong className="text-[#E6F1EE]">{user.username}</strong>. Enter your password to confirm.
+            This action permanently wipes all vault records for{' '}
+            <strong className="text-[#E6F1EE]">{user.username}</strong>. Enter your Rooh Key to confirm.
           </p>
           <input
-            type="password"
+            type="text"
             required
-            value={deletePassword}
-            onChange={(e) => setDeletePassword(e.target.value)}
-            placeholder="Enter password to confirm"
-            aria-label="Password confirmation"
-            className="w-full bg-[#030505] border border-red-500/35 focus:border-red-400 focus:outline-none rounded-lg px-3 py-2 text-xs text-[#E6F1EE]"
+            value={deleteRoohKey}
+            onChange={(e) => setDeleteRoohKey(e.target.value.toUpperCase())}
+            placeholder="ROOH-XXXX-XXXX-XXXX"
+            aria-label="Rooh Key confirmation"
+            className="w-full bg-[#030505] border border-red-500/35 focus:border-red-400 focus:outline-none rounded-lg px-3 py-2 text-xs text-[#00E5FF] tracking-wider"
           />
           <div className="flex justify-end gap-2">
             <button
