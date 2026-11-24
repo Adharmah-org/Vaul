@@ -8,7 +8,7 @@ import { ToastContainer } from './components/ToastContainer';
 import { useVault, VaultProvider } from './context/VaultContext';
 
 const VaultAppRouter: React.FC = () => {
-  const { user, session, pendingRoohKey, isInitializing, preferences } = useVault();
+  const { user, session, isInitializing, preferences } = useVault();
 
   const accentHex = preferences.accentMode === 'cyan' ? '#00E5FF' : '#39FF88';
 
@@ -32,7 +32,7 @@ const VaultAppRouter: React.FC = () => {
             INITIALIZING ROOH VAULT...
           </div>
         </div>
-      ) : !user || !session || pendingRoohKey ? (
+      ) : !user || !session ? (
         <AuthTerminal />
       ) : (
         <Routes>

@@ -200,85 +200,65 @@ export class HybridVaultStorageProvider implements StorageProvider {
     return localResult;
   }
 
-  async authenticateUser(usernameOrVaultId: string, roohKey: string): Promise<LoginResult> {
+  async authenticateUser(usernameOrVaultId: string): Promise<LoginResult> {
     const cleanInput = usernameOrVaultId.trim();
     const cleanLower = cleanInput.toLowerCase();
-    const normalizedKey = normalizeRoohKey(roohKey);
 
-    if (!cleanInput || !normalizedKey) {
-      throw new Error('Username (or Vault ID) and Rooh Key are required.');
-    }
-    if (!isValidRoohKeyFormat(normalizedKey)) {
-      throw new Error('ACCESS DENIED: Invalid Rooh Key format (expected ROOH-XXXX-XXXX-XXXX).');
+    if (!cleanInput) {
+      throw new Error('Username or Vault ID is required.');
     }
 
     await this.reconcileCanonicalLocalUsers();
     const seed = findCanonicalSeedByInput(cleanInput);
 
-    // 1. Check local IndexedDB by ID, username, or canonical seed
-    let localUser = await db.users
-      .filter((u) => {
-        if (u.id.toLowerCase() === cleanLower) return true;
-        if (u.username.toLowerCase() === cleanLower) return true;
-        if (seed) {
-          return (
-            u.id.toLowerCase() === seed.vaultId.toLowerCase() ||
-            u.username.toLowerCase() === seed.usernameLower ||
-            (seed.aliases?.some((a) => a.toLowerCase() === u.username.toLowerCase()) ?? false) ||
-            seed.legacyVaultIds.some((lid) => lid.toLowerCase() === u.id.toLowerCase())
-          );
-        }
-        return false;
-      })
-      .first();
+    const allUsers = await db.users.toArray();
+    let localUser = allUsers.find((u) => {
+      if (u.id.toLowerCase() === cleanLower) return true;
+      if (u.username.toLowerCase() === cleanLower) return true;
+      if (seed) {
+        return (
+          u.id.toLowerCase() === seed.vaultId.toLowerCase() ||
+          u.username.toLowerCase() === seed.usernameLower ||
+          (seed.aliases?.some((a) => a.toLowerCase() === u.username.toLowerCase()) ?? false) ||
+          seed.legacyVaultIds.some((lid) => lid.toLowerCase() === u.id.toLowerCase())
+        );
+      }
+      return false;
+    });
 
     if (localUser) {
-      let localKeyValid = await verifySecret(normalizedKey, localUser.roohKeyHash);
-      if (!localKeyValid && seed) {
-        const seedKeyValid = await verifySecret(normalizedKey, seed.roohKeyHash);
-        if (seedKeyValid) {
-          localKeyValid = true;
-          await db.users
-            .update(localUser.id, { roohKeyHash: seed.roohKeyHash, updatedAt: Date.now() })
-            .catch(() => {});
-          localUser = { ...localUser, roohKeyHash: seed.roohKeyHash };
-        }
-      }
-      if (localKeyValid) {
-        if (seed && localUser.id !== seed.vaultId) {
-          await this.migrateLocalUserId(localUser.id, seed.vaultId, seed.username, seed.roohKeyHash);
-          localUser = (await db.users.get(seed.vaultId)) || {
-            ...localUser,
-            id: seed.vaultId,
-            username: seed.username,
-          };
-        }
-
-        const prefs = await this.local.getPreferences(localUser.id);
-        const now = Date.now();
-        const session: SessionRecord = {
-          id: generateUuid(),
-          userId: localUser.id,
-          username: localUser.username,
-          token: generateSessionToken(),
-          createdAt: now,
-          expiresAt: now + prefs.sessionDurationMinutes * 60 * 1000,
+      if (seed && localUser.id !== seed.vaultId) {
+        await this.migrateLocalUserId(localUser.id, seed.vaultId, seed.username, seed.roohKeyHash);
+        localUser = (await db.users.get(seed.vaultId)) || {
+          ...localUser,
+          id: seed.vaultId,
+          username: seed.username,
         };
-        await db.sessions.add(session);
-        sessionStorage.setItem(ACTIVE_SESSION_ID_KEY, session.id);
-
-        // Sync user, pull remote updates from other browsers, and push local files to cloud
-        await this.cloud.syncUserToCloud(localUser, prefs).catch(() => {});
-        await this.mergeCloudToLocal(localUser.id, localUser).catch(() => {});
-        this.syncLocalToCloud(localUser.id).catch(() => {});
-
-        return { user: localUser, session };
       }
-      // If local key failed (e.g., key rotated on another browser), fall through to verify against Cloud!
+
+      const prefs = await this.local.getPreferences(localUser.id);
+      const now = Date.now();
+      const session: SessionRecord = {
+        id: generateUuid(),
+        userId: localUser.id,
+        username: localUser.username,
+        token: generateSessionToken(),
+        createdAt: now,
+        expiresAt: now + prefs.sessionDurationMinutes * 60 * 1000,
+      };
+      await db.sessions.add(session);
+      sessionStorage.setItem(ACTIVE_SESSION_ID_KEY, session.id);
+
+      // Sync user, pull remote updates from other browsers, and push local files to cloud
+      await this.cloud.syncUserToCloud(localUser, prefs).catch(() => {});
+      await this.mergeCloudToLocal(localUser.id, localUser).catch(() => {});
+      this.syncLocalToCloud(localUser.id).catch(() => {});
+
+      return { user: localUser, session };
     }
 
     // 2. Authenticate against Cloud Firestore (supports any browser, incognito, or Vault UUID / canonical seed)
-    const cloudResult = await this.cloud.authenticateUser(cleanInput, normalizedKey);
+    const cloudResult = await this.cloud.authenticateUser(cleanInput);
 
     // If local browser had a legacy user for the same username, migrate its local files into cloudResult.user.id!
     if (localUser && localUser.id !== cloudResult.user.id) {

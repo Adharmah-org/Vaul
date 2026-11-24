@@ -324,13 +324,11 @@ export class FirestoreStorageProvider implements StorageProvider {
     }
   }
 
-  async authenticateUser(usernameOrVaultId: string, roohKey: string): Promise<LoginResult> {
+  async authenticateUser(usernameOrVaultId: string): Promise<LoginResult> {
     const cleanInput = usernameOrVaultId.trim();
     const cleanLower = cleanInput.toLowerCase();
-    const normalizedKey = normalizeRoohKey(roohKey);
     const seed = findCanonicalSeedByInput(cleanInput);
 
-    // Build candidate vault IDs to check
     const candidates: string[] = [];
     if (seed) {
       candidates.push(seed.vaultId);
@@ -353,9 +351,7 @@ export class FirestoreStorageProvider implements StorageProvider {
               candidates.push(aliasUid);
             }
           }
-        } catch {
-          // continue to fallbacks
-        }
+        } catch {}
       }
     }
 
@@ -370,41 +366,19 @@ export class FirestoreStorageProvider implements StorageProvider {
 
     let resolvedUid: string | null = null;
     let data: Record<string, unknown> | undefined;
-    const legacySourcesToMigrate: string[] = [];
 
     for (const candidateId of candidates) {
-      const path = `vaults/${candidateId}`;
       try {
         const snap = await getDoc(this.vaultRef(candidateId));
         if (snap.exists()) {
-          const docData = snap.data();
-          const isSeedLegacy = seed && candidateId !== seed.vaultId;
-          if (!resolvedUid) {
-            resolvedUid = candidateId;
-            data = docData;
-          } else if (isSeedLegacy) {
-            legacySourcesToMigrate.push(candidateId);
-          }
+          resolvedUid = candidateId;
+          data = snap.data();
+          break;
         }
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, path);
-      }
+      } catch {}
     }
 
-    // If canonical seed exists and its primary vault doc isn't created yet, verify against legacy/seed hash & provision it
     if (seed && (!resolvedUid || resolvedUid !== seed.vaultId)) {
-      let hashToCheck = data?.roohKeyHash ? String(data.roohKeyHash) : seed.roohKeyHash;
-      let keyOk = await verifySecret(normalizedKey, hashToCheck);
-      if (!keyOk && hashToCheck !== seed.roohKeyHash) {
-        keyOk = await verifySecret(normalizedKey, seed.roohKeyHash);
-        if (keyOk) {
-          hashToCheck = seed.roohKeyHash;
-        }
-      }
-      if (!keyOk) {
-        throw new Error('ACCESS DENIED: Invalid Rooh Key.');
-      }
-
       const prefs = (data?.preferences as VaultPreferences | undefined) || DEFAULT_PREFERENCES;
       const targetRef = this.vaultRef(seed.vaultId);
       const targetSnap = await getDoc(targetRef).catch(() => null);
@@ -413,28 +387,14 @@ export class FirestoreStorageProvider implements StorageProvider {
           ownerUid: seed.vaultId,
           username: seed.username,
           usernameLower: seed.usernameLower,
-          roohKeyHash: hashToCheck,
+          roohKeyHash: seed.roohKeyHash,
           preferences: prefs,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       }
-      await this.ensureVaultAlias(seed.username, seed.vaultId);
-      for (const alias of seed.aliases || []) {
-        await this.ensureVaultAlias(alias, seed.vaultId);
-      }
-
-      // Migrate any legacy vault docs into the canonical seed.vaultId
-      for (const legacyId of [...seed.legacyVaultIds, ...legacySourcesToMigrate]) {
-        if (legacyId === seed.vaultId) continue;
-        const lSnap = await getDoc(this.vaultRef(legacyId)).catch(() => null);
-        if (lSnap && lSnap.exists()) {
-          await this.migrateLegacyCloudVault(legacyId, seed.vaultId);
-        }
-      }
-
-      const freshSnap = await getDoc(targetRef);
       resolvedUid = seed.vaultId;
+      const freshSnap = await getDoc(targetRef);
       data = freshSnap.data();
     }
 
@@ -442,41 +402,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       throw new Error('ACCESS DENIED: No vault found matching this username or Vault ID.');
     }
 
-    // Verify username match when not logging in by UUID/seed
-    if (!seed && !isUuidLike(cleanInput) && String(data.usernameLower || '') !== cleanLower) {
-      throw new Error('ACCESS DENIED: Invalid username or Rooh Key.');
-    }
-
-    let effectiveHash = String(data.roohKeyHash || '');
-    let keyOk = await verifySecret(normalizedKey, effectiveHash);
-    if (!keyOk && seed) {
-      const seedKeyOk = await verifySecret(normalizedKey, seed.roohKeyHash);
-      if (seedKeyOk) {
-        keyOk = true;
-        effectiveHash = seed.roohKeyHash;
-        await updateDoc(this.vaultRef(resolvedUid), {
-          roohKeyHash: seed.roohKeyHash,
-          updatedAt: serverTimestamp(),
-        }).catch(() => {});
-      }
-    }
-    if (!keyOk) {
-      throw new Error('ACCESS DENIED: Invalid Rooh Key.');
-    }
-
-    await this.ensureVaultAlias(String(data.username), resolvedUid);
-    if (seed) {
-      await this.ensureVaultAlias(seed.username, resolvedUid);
-      for (const alias of seed.aliases || []) {
-        await this.ensureVaultAlias(alias, resolvedUid);
-      }
-    }
-    if (legacySourcesToMigrate.length > 0) {
-      for (const legacyId of legacySourcesToMigrate) {
-        await this.migrateLegacyCloudVault(legacyId, resolvedUid);
-      }
-    }
-
+    const effectiveHash = String(data.roohKeyHash || seed?.roohKeyHash || '');
     const prefs = (data.preferences as VaultPreferences | undefined) || DEFAULT_PREFERENCES;
     const durationMs = (prefs.sessionDurationMinutes || 120) * 60 * 1000;
     const now = Date.now();
@@ -497,6 +423,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       createdAt: now,
       expiresAt: now + durationMs,
     };
+
     sessionStorage.setItem(ACTIVE_VAULT_USER_ID_KEY, resolvedUid);
     sessionStorage.setItem(`${CLOUD_SESSION_KEY_PREFIX}${resolvedUid}`, JSON.stringify(session));
 

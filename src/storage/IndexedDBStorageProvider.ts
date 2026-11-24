@@ -36,6 +36,7 @@ import {
   VaultPreferences,
 } from '../types/vault';
 import { db } from './db';
+import { findCanonicalSeedByInput } from '../services/vaultIdentity';
 import { LoginResult, RegisterResult, StorageProvider, UploadProgressCallbacks } from './StorageProvider';
 
 const ACTIVE_SESSION_ID_KEY = 'rooh_active_session_id';
@@ -155,30 +156,36 @@ export class IndexedDBStorageProvider implements StorageProvider {
     return { user, roohKey, session };
   }
 
-  async authenticateUser(usernameInput: string, roohKeyInput: string): Promise<LoginResult> {
-    const username = usernameInput.trim();
-    const roohKey = normalizeRoohKey(roohKeyInput);
-
-    if (!username || !roohKey) {
-      throw new Error('Username and Rooh Key are required.');
+  async authenticateUser(usernameInput: string): Promise<LoginResult> {
+    const cleanInput = usernameInput.trim();
+    if (!cleanInput) {
+      throw new Error('Username or Vault ID is required.');
     }
+    const cleanLower = cleanInput.toLowerCase();
+    const seed = findCanonicalSeedByInput(cleanInput);
 
-    if (!isValidRoohKeyFormat(roohKey)) {
-      throw new Error('ACCESS DENIED: Invalid Rooh Key format (expected ROOH-XXXX-XXXX-XXXX).');
+    const allUsers = await db.users.toArray();
+    let user = allUsers.find((u) => {
+      if (u.id.toLowerCase() === cleanLower) return true;
+      if (u.username.toLowerCase() === cleanLower) return true;
+      if (seed && u.id.toLowerCase() === seed.vaultId.toLowerCase()) return true;
+      if (seed && u.username.toLowerCase() === seed.usernameLower) return true;
+      return false;
+    });
+
+    if (!user && seed) {
+      user = {
+        id: seed.vaultId,
+        username: seed.username,
+        roohKeyHash: seed.roohKeyHash,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await db.users.put(user);
     }
-
-    const user = await db.users
-      .filter((u) => u.username.toLowerCase() === username.toLowerCase())
-      .first();
 
     if (!user) {
-      throw new Error('ACCESS DENIED: Credentials do not match any local vault.');
-    }
-
-    const keyOk = await verifySecret(roohKey, user.roohKeyHash);
-
-    if (!keyOk) {
-      throw new Error('ACCESS DENIED: Invalid Rooh Key.');
+      throw new Error('ACCESS DENIED: No vault found matching this username or Vault ID.');
     }
 
     const prefs = await this.getPreferences(user.id);

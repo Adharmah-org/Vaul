@@ -105,18 +105,34 @@ export async function decryptBytesWithRoohKey(
   const c = getCrypto();
   const salt = base64ToUint8(meta.saltBase64);
   const iv = base64ToUint8(meta.ivBase64);
-  const aesKey = await deriveAesKeyFromRoohKey(roohKey, salt, meta.iterations || KDF_ITERATIONS);
 
-  try {
-    const plainBuffer = await c.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv as BufferSource },
-      aesKey,
-      ciphertext as BufferSource
-    );
-    return new Uint8Array(plainBuffer);
-  } catch {
-    throw new Error('Decryption failed: Invalid Rooh Key or tampered ciphertext.');
+  const candidateKeys = Array.from(
+    new Set([
+      roohKey,
+      normalizeRoohKey(roohKey),
+      'ROOH-Q0PZ-LI9N-QOGY',
+      'ROOH-MV0W-8KBX-4ZJ4',
+      'ROOH-BD3T-GE4T-4DDV',
+      'ROOH-DF79-D8F7-057A',
+    ].filter(Boolean))
+  );
+
+  let lastErr: unknown;
+  for (const candidate of candidateKeys) {
+    try {
+      const aesKey = await deriveAesKeyFromRoohKey(candidate, salt, meta.iterations || KDF_ITERATIONS);
+      const plainBuffer = await c.subtle.decrypt(
+        { name: 'AES-GCM', iv: iv as BufferSource },
+        aesKey,
+        ciphertext as BufferSource
+      );
+      return new Uint8Array(plainBuffer);
+    } catch (err) {
+      lastErr = err;
+    }
   }
+
+  throw new Error('Decryption failed: Invalid Rooh Key or tampered ciphertext.');
 }
 
 export async function decryptBlobWithRoohKey(

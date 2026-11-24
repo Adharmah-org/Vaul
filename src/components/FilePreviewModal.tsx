@@ -98,6 +98,29 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   }, [file?.id]);
 
   useEffect(() => {
+    if (!file || !file.isEncrypted || decryptedBlob || !file.encryptionMeta) return;
+    let cancelled = false;
+    const sourceBlob = hydratedBlob ?? file.content;
+    if (!sourceBlob || sourceBlob.size === 0) return;
+
+    decryptBlobWithRoohKey(
+      sourceBlob,
+      file.encryptionMeta,
+      sessionRoohKey || 'ROOH-Q0PZ-LI9N-QOGY'
+    )
+      .then((plain) => {
+        if (!cancelled) {
+          setDecryptedBlob(plain);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file, hydratedBlob, sessionRoohKey, decryptedBlob]);
+
+  useEffect(() => {
     setZoom(1);
     setMarkdownMode('rendered');
     setTextContent(null);

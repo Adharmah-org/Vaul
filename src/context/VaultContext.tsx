@@ -32,8 +32,6 @@ interface VaultContextValue {
   isInitializing: boolean;
   isLoadingData: boolean;
   hasExistingAccount: boolean;
-  pendingRoohKey: string | null;
-  clearPendingRoohKey: () => void;
 
   encryptedUploadMode: boolean;
   isEncryptionArmed: boolean;
@@ -66,7 +64,7 @@ interface VaultContextValue {
   otherLocalFilesCount: number;
   consolidateLocalFiles: () => Promise<number>;
   register: (username: string) => Promise<void>;
-  login: (username: string, roohKey: string) => Promise<void>;
+  login: (username: string) => Promise<void>;
   checkRecoveryEligibility: (identifier: string) => Promise<{
     found: boolean;
     vaultId: string;
@@ -330,8 +328,6 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     async (username: string) => {
       const result = await storageSingleton.registerUser(username);
       setHasExistingAccount(true);
-      setPendingRoohKey(result.roohKey);
-      setSessionRoohKey(result.roohKey);
       setUser(result.user);
       setSession(result.session);
       await loadUserWorkspace(result.user.id);
@@ -339,15 +335,9 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [loadUserWorkspace]
   );
 
-  const clearPendingRoohKey = useCallback(() => {
-    setPendingRoohKey(null);
-  }, []);
-
   const login = useCallback(
-    async (username: string, roohKey: string) => {
-      const result = await storageSingleton.authenticateUser(username, roohKey);
-      setPendingRoohKey(null);
-      setSessionRoohKey(normalizeRoohKey(roohKey));
+    async (username: string) => {
+      const result = await storageSingleton.authenticateUser(username);
       setUser(result.user);
       setSession(result.session);
       await loadUserWorkspace(result.user.id);
@@ -621,10 +611,8 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isInitializing,
         isLoadingData,
         hasExistingAccount,
-        pendingRoohKey,
-        clearPendingRoohKey,
         encryptedUploadMode,
-        isEncryptionArmed: Boolean(sessionRoohKey),
+        isEncryptionArmed: false,
         armEncryptedModalOpen,
         pendingEncryptedUploadCount,
         setEncryptedUploadMode,
