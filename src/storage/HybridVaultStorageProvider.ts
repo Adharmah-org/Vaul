@@ -27,10 +27,16 @@ import {
   normalizeRoohKey,
   verifySecret,
 } from '../services/crypto';
-import { blobToBase64 } from '../services/fileUtils';
+import {
+  blobToBase64,
+  detectFileCategory,
+  getFileExtension,
+  sanitizeFileName,
+} from '../services/fileUtils';
 import {
   downloadBlobFromDrive,
   getDriveAccessToken,
+  listVaultDriveFiles,
   uploadBlobToDrive,
 } from '../services/googleDriveStorage';
 import {
@@ -525,11 +531,39 @@ export class HybridVaultStorageProvider implements StorageProvider {
             summary.largeFilesPendingDrive += 1;
           }
 
-          await this.cloud
-            .upsertFileRecord(effectiveUserId, { ...file, driveFileId }, blob, driveFileId)
-            .catch(() => {});
+          let firestoreOk = false;
+          try {
+            await this.cloud.upsertFileRecord(
+              effectiveUserId,
+              { ...file, driveFileId },
+              blob,
+              driveFileId
+            );
+            firestoreOk = true;
+          } catch {
+            firestoreOk = false;
+          }
 
-          if (blob.size <= MAX_CLOUD_FILE_BYTES || driveFileId) {
+          if (!firestoreOk && driveToken && !driveFileId) {
+            try {
+              const res = await uploadBlobToDrive(
+                effectiveUserId,
+                file.id,
+                file.name,
+                file.mimeType,
+                blob
+              );
+              driveFileId = res.driveFileId;
+              summary.syncedDriveFiles += 1;
+              await this.cloud
+                .upsertFileRecord(effectiveUserId, { ...file, driveFileId }, undefined, driveFileId)
+                .catch(() => {});
+            } catch (err) {
+              console.warn(`Google Drive fallback skipped for "${file.name}":`, err);
+            }
+          }
+
+          if ((firestoreOk && blob.size <= MAX_CLOUD_FILE_BYTES) || driveFileId) {
             await db.files
               .update(file.id, { cloudSynced: true, ...(driveFileId ? { driveFileId } : {}) })
               .catch(() => {});
@@ -547,8 +581,129 @@ export class HybridVaultStorageProvider implements StorageProvider {
   }
 
   /**
-   * Bidirectional sync: pulls remote items into local IndexedDB (preserving local Blobs)
-   * and pushes all local items up to Firestore / Google Drive.
+   * Discovers files already stored in Google Drive folder `rooh.clouds/<vaultUid>`
+   * and links/imports them into local IndexedDB and Cloud Firestore metadata so they
+   * appear across every browser.
+   */
+  async reconcileDriveFiles(userId: string): Promise<boolean> {
+    if (!getDriveAccessToken()) return false;
+
+    const seed = findCanonicalSeedByInput(userId);
+    const effectiveUserId = seed ? seed.vaultId : userId;
+
+    try {
+      const driveFiles = await listVaultDriveFiles(effectiveUserId);
+      if (driveFiles.length === 0) return false;
+
+      const existingFiles = await db.files.where('userId').equals(effectiveUserId).toArray();
+      let changed = false;
+
+      for (const df of driveFiles) {
+        if (df.mimeType === 'application/vnd.google-apps.folder') continue;
+
+        const match = existingFiles.find(
+          (f) =>
+            f.driveFileId === df.driveFileId ||
+            (df.roohFileId && f.id === df.roohFileId) ||
+            (!f.driveFileId && f.name === df.name && f.size === df.size)
+        );
+
+        if (match) {
+          if (match.driveFileId !== df.driveFileId || !match.cloudSynced) {
+            await db.files
+              .update(match.id, { driveFileId: df.driveFileId, cloudSynced: true })
+              .catch(() => {});
+            await this.cloud
+              .upsertFileRecord(
+                effectiveUserId,
+                { ...match, driveFileId: df.driveFileId },
+                undefined,
+                df.driveFileId
+              )
+              .catch(() => {});
+            match.driveFileId = df.driveFileId;
+            match.cloudSynced = true;
+            changed = true;
+          }
+          continue;
+        }
+
+        const safeName = sanitizeFileName(df.name || 'drive-file');
+        const mimeType = df.mimeType || 'application/octet-stream';
+        const now = Date.now();
+        const newRecord: FileRecord = {
+          id: df.roohFileId || generateUuid(),
+          userId: effectiveUserId,
+          folderId: null,
+          name: safeName,
+          mimeType,
+          category: detectFileCategory(mimeType, safeName),
+          extension: getFileExtension(safeName),
+          size: df.size,
+          content: new Blob([], { type: mimeType }),
+          isEncrypted: false,
+          tags: [],
+          isFavorite: false,
+          driveFileId: df.driveFileId,
+          cloudSynced: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        await db.files.put(newRecord);
+        await this.cloud
+          .upsertFileRecord(effectiveUserId, newRecord, undefined, df.driveFileId)
+          .catch(() => {});
+        existingFiles.push(newRecord);
+        changed = true;
+      }
+
+      return changed;
+    } catch (err) {
+      console.warn('Google Drive reconciliation notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Counts local files on this browser stored under other local user IDs (e.g. created
+   * prior to linking the canonical UID) so they can optionally be consolidated.
+   */
+  async countOtherLocalVaultFiles(targetUserId: string): Promise<number> {
+    const seed = findCanonicalSeedByInput(targetUserId);
+    const effectiveUserId = seed ? seed.vaultId : targetUserId;
+    const allFiles = await db.files.toArray();
+    return allFiles.filter((f) => f.userId !== effectiveUserId).length;
+  }
+
+  /**
+   * Moves any locally saved IndexedDB vault items from other local browser profiles into
+   * the active vault UID (e.g. d6a19222-fefb-4c0e-b3b4-f7a725488caa) and triggers sync.
+   */
+  async consolidateOtherLocalVaults(targetUserId: string): Promise<number> {
+    const seed = findCanonicalSeedByInput(targetUserId);
+    const effectiveUserId = seed ? seed.vaultId : targetUserId;
+    const allFiles = await db.files.toArray();
+    const otherUserIds = Array.from(
+      new Set(allFiles.map((f) => f.userId).filter((uid) => uid && uid !== effectiveUserId))
+    );
+    let movedCount = 0;
+
+    for (const oldUid of otherUserIds) {
+      const count = allFiles.filter((f) => f.userId === oldUid).length;
+      await this.migrateLocalUserId(oldUid, effectiveUserId, seed?.username, seed?.roohKeyHash);
+      movedCount += count;
+    }
+
+    if (movedCount > 0) {
+      await this.syncBidirectional(effectiveUserId, { includeGoogleDrive: Boolean(getDriveAccessToken()) });
+    }
+    return movedCount;
+  }
+
+  /**
+   * Bidirectional sync: pulls remote items into local IndexedDB (preserving local Blobs),
+   * reconciles Google Drive files in `rooh.clouds/<uid>`, and pushes all local items up.
    */
   async syncBidirectional(
     userId: string,
@@ -563,9 +718,10 @@ export class HybridVaultStorageProvider implements StorageProvider {
       await this.cloud.syncUserToCloud(localUser).catch(() => {});
     }
 
-    const pulledUpdates = await this.mergeCloudToLocal(effectiveUserId, localUser || undefined);
+    const pulledCloud = await this.mergeCloudToLocal(effectiveUserId, localUser || undefined);
+    const pulledDrive = await this.reconcileDriveFiles(effectiveUserId);
     const pushSummary = await this.syncLocalToCloud(effectiveUserId, options);
-    return { pulledUpdates, pushSummary };
+    return { pulledUpdates: pulledCloud || pulledDrive, pushSummary };
   }
 
   async verifyRoohKey(userId: string, roohKey: string): Promise<boolean> {
@@ -680,7 +836,9 @@ export class HybridVaultStorageProvider implements StorageProvider {
     folderId: string | null,
     callbacks?: UploadProgressCallbacks
   ): Promise<FileRecord> {
-    const localFile = await this.local.uploadFile(userId, file, folderId, callbacks);
+    const seed = findCanonicalSeedByInput(userId);
+    const effectiveUserId = seed ? seed.vaultId : userId;
+    const localFile = await this.local.uploadFile(effectiveUserId, file, folderId, callbacks);
 
     // Sync exact file ID & binary payload to Firestore (<= 10 MB) and/or Google Drive (if connected)
     const syncInBackground = async () => {
@@ -690,7 +848,7 @@ export class HybridVaultStorageProvider implements StorageProvider {
       if (getDriveAccessToken() && payloadBlob.size > MAX_CLOUD_FILE_BYTES) {
         try {
           const uploaded = await uploadBlobToDrive(
-            userId,
+            effectiveUserId,
             localFile.id,
             localFile.name,
             localFile.mimeType,
@@ -703,9 +861,36 @@ export class HybridVaultStorageProvider implements StorageProvider {
         }
       }
 
-      await this.cloud.upsertFileRecord(userId, localFile, payloadBlob, driveFileId);
-      if (payloadBlob.size <= MAX_CLOUD_FILE_BYTES || driveFileId) {
-        await db.files.update(localFile.id, { cloudSynced: true }).catch(() => {});
+      let firestoreOk = false;
+      try {
+        await this.cloud.upsertFileRecord(effectiveUserId, localFile, payloadBlob, driveFileId);
+        firestoreOk = true;
+      } catch {
+        firestoreOk = false;
+      }
+
+      if (!firestoreOk && getDriveAccessToken() && !driveFileId && payloadBlob.size > 0) {
+        try {
+          const uploaded = await uploadBlobToDrive(
+            effectiveUserId,
+            localFile.id,
+            localFile.name,
+            localFile.mimeType,
+            payloadBlob
+          );
+          driveFileId = uploaded.driveFileId;
+          await this.cloud
+            .upsertFileRecord(effectiveUserId, { ...localFile, driveFileId }, undefined, driveFileId)
+            .catch(() => {});
+        } catch (err) {
+          console.warn('Google Drive fallback upload notice:', err);
+        }
+      }
+
+      if ((firestoreOk && payloadBlob.size <= MAX_CLOUD_FILE_BYTES) || driveFileId) {
+        await db.files
+          .update(localFile.id, { cloudSynced: true, ...(driveFileId ? { driveFileId } : {}) })
+          .catch(() => {});
       }
     };
 

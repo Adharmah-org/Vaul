@@ -39,6 +39,8 @@ export const SettingsView: React.FC = () => {
     driveStatus,
     connectDrive,
     disconnectDrive,
+    otherLocalFilesCount,
+    consolidateLocalFiles,
   } = useVault();
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -60,6 +62,7 @@ export const SettingsView: React.FC = () => {
   // Cloud & Google Drive sync
   const [uidCopied, setUidCopied] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
+  const [driveError, setDriveError] = useState<string | null>(null);
   const [confirmClearDriveOpen, setConfirmClearDriveOpen] = useState(false);
   const [clearDriveBusy, setClearDriveBusy] = useState(false);
 
@@ -102,21 +105,24 @@ export const SettingsView: React.FC = () => {
 
   const handleConnectDrive = async () => {
     setDriveBusy(true);
+    setDriveError(null);
     try {
       const status = await connectDrive();
       addToast({
         type: 'success',
         title: 'Google Drive connected',
         description: status.email
-          ? `Connected ${status.email} for cross-browser overflow & backup storage.`
-          : 'Google Drive storage is ready for cross-browser sync.',
+          ? `Connected ${status.email} for folder rooh.clouds/${user.id}.`
+          : `Google Drive storage connected for folder rooh.clouds/${user.id}.`,
       });
       await handleSyncToCloud(false);
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Authorization cancelled or failed.';
+      setDriveError(message);
       addToast({
         type: 'error',
         title: 'Google Drive connection failed',
-        description: err instanceof Error ? err.message : 'Authorization cancelled or failed.',
+        description: message,
       });
     } finally {
       setDriveBusy(false);
@@ -363,6 +369,39 @@ export const SettingsView: React.FC = () => {
           </button>
         </div>
 
+        {otherLocalFilesCount > 0 && (
+          <div className="bg-[#030505] border border-[#39FF88]/30 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-xs font-sans-ui text-[#A3B5B0]">
+              Found <strong className="text-[#39FF88]">{otherLocalFilesCount}</strong> locally saved{' '}
+              {otherLocalFilesCount === 1 ? 'file' : 'files'} from another local browser profile. Link them into{' '}
+              <code className="text-[#00E5FF]">{user.id}</code> so they sync across all browsers.
+            </div>
+            <button
+              type="button"
+              disabled={isSyncingCloud}
+              onClick={async () => {
+                try {
+                  const moved = await consolidateLocalFiles();
+                  addToast({
+                    type: 'success',
+                    title: 'Local files linked to Vault UID',
+                    description: `Linked ${moved} local files into ${user.id} and synced to cloud.`,
+                  });
+                } catch (err) {
+                  addToast({
+                    type: 'error',
+                    title: 'Failed to link local files',
+                    description: err instanceof Error ? err.message : 'Unable to link local files.',
+                  });
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg hover:bg-[#52FF99] disabled:opacity-50 shrink-0"
+            >
+              Link &amp; Sync Local Files
+            </button>
+          </div>
+        )}
+
         {/* Google Drive Storage Card */}
         <div className="bg-[#030505] border border-white/10 rounded-xl p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -386,6 +425,15 @@ export const SettingsView: React.FC = () => {
           <p className="text-[11px] text-[#8A9D98] font-sans-ui leading-relaxed">
             Connect your Google account inside Settings to back up locally saved files of any size into a dedicated <code className="text-[#E6F1EE]">rooh.clouds/{user.id}</code> folder on Google Drive. Access tokens remain strictly in memory for this session.
           </p>
+
+          {driveError && (
+            <div
+              role="alert"
+              className="bg-red-500/10 border border-red-500/35 rounded-lg p-3 text-[11px] text-red-300 font-sans-ui leading-relaxed break-words"
+            >
+              {driveError}
+            </div>
+          )}
 
           {!driveStatus.connected ? (
             <button

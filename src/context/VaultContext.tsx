@@ -62,6 +62,8 @@ interface VaultContextValue {
   driveStatus: DriveConnectionStatus;
   connectDrive: () => Promise<DriveConnectionStatus>;
   disconnectDrive: () => Promise<void>;
+  otherLocalFilesCount: number;
+  consolidateLocalFiles: () => Promise<number>;
   register: (username: string) => Promise<void>;
   login: (username: string, roohKey: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -118,6 +120,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [driveStatus, setDriveStatus] = useState<DriveConnectionStatus>(() =>
     getDriveConnectionStatus()
   );
+  const [otherLocalFilesCount, setOtherLocalFilesCount] = useState(0);
 
   useEffect(() => {
     const unsubscribe = initDriveAuth(
@@ -158,6 +161,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         loadedTags,
         loadedTrash,
         loadedPrefs,
+        otherLocalCount,
       ] = await Promise.all([
         storageSingleton.listFolders(userId),
         storageSingleton.listFiles(userId),
@@ -166,6 +170,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         storageSingleton.listTags(userId),
         storageSingleton.listTrash(userId),
         storageSingleton.getPreferences(userId),
+        storageSingleton.countOtherLocalVaultFiles(userId).catch(() => 0),
       ]);
       setFolders(loadedFolders);
       setFiles(loadedFiles);
@@ -174,6 +179,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setTags(loadedTags);
       setTrash(loadedTrash);
       setPreferences(loadedPrefs);
+      setOtherLocalFilesCount(otherLocalCount);
     } finally {
       setIsLoadingData(false);
     }
@@ -217,6 +223,18 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await disconnectGoogleDrive();
     setDriveStatus({ connected: false, email: null, displayName: null });
   }, []);
+
+  const consolidateLocalFiles = useCallback(async (): Promise<number> => {
+    if (!user) return 0;
+    setIsSyncingCloud(true);
+    try {
+      const moved = await storageSingleton.consolidateOtherLocalVaults(user.id);
+      await loadUserWorkspace(user.id);
+      return moved;
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  }, [user, loadUserWorkspace]);
 
   // Initial session hydration + ?autostart=1 support + background bidirectional sync
   useEffect(() => {
@@ -569,6 +587,8 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         driveStatus,
         connectDrive,
         disconnectDrive,
+        otherLocalFilesCount,
+        consolidateLocalFiles,
         register,
         login,
         logout,
