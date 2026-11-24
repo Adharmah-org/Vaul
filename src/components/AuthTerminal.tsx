@@ -455,6 +455,20 @@ export const AuthTerminal: React.FC = () => {
               >
                 {isSubmitting ? 'Authenticating...' : 'Unlock Vault'}
               </button>
+
+              <div className="pt-3 border-t border-white/10 space-y-2 text-center">
+                <p className="text-[11px] text-[#8A9D98] font-sans-ui">
+                  Access from any browser: Enter your Username & Rooh Key to connect your vault anywhere.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setUnlockerOpen(true)}
+                  className="inline-flex items-center gap-1.5 text-xs text-[#00E5FF] hover:underline"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  Have an offline .rooh capsule? Unlock capsule here
+                </button>
+              </div>
             </form>
           ) : (
             <form onSubmit={handleSignup} className="space-y-4">

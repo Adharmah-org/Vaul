@@ -26,12 +26,6 @@
           "pattern": "^[a-z0-9._\\-]+$",
           "description": "Lowercase normalized handle for case-insensitive matching."
         },
-        "passwordHash": {
-          "type": "string",
-          "minLength": 20,
-          "maxLength": 256,
-          "description": "Salted PBKDF2-SHA256 digest of the vault password."
-        },
         "roohKeyHash": {
           "type": "string",
           "minLength": 20,
@@ -57,7 +51,6 @@
         "ownerUid",
         "username",
         "usernameLower",
-        "passwordHash",
         "roohKeyHash",
         "preferences",
         "createdAt",

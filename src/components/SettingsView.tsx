@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
+  Cloud,
   Download,
   Key,
   Keyboard,
@@ -47,7 +48,32 @@ export const SettingsView: React.FC = () => {
   const [deleteRoohKey, setDeleteRoohKey] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
 
+  // Cloud multi-browser sync
+  const [syncBusy, setSyncBusy] = useState(false);
+
   if (!user || !session) return null;
+
+  const handleSyncToCloud = async () => {
+    setSyncBusy(true);
+    try {
+      if ('syncLocalToCloud' in storage && typeof (storage as unknown as { syncLocalToCloud: (id: string) => Promise<void> }).syncLocalToCloud === 'function') {
+        await (storage as unknown as { syncLocalToCloud: (id: string) => Promise<void> }).syncLocalToCloud(user.id);
+      }
+      addToast({
+        type: 'success',
+        title: 'Cloud sync complete',
+        description: 'All local folders, notes, bookmarks, and preferences are synced for other browsers.',
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Sync failed',
+        description: err instanceof Error ? err.message : 'Unable to sync to cloud.',
+      });
+    } finally {
+      setSyncBusy(false);
+    }
+  };
 
   const handleRotateRoohKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -328,6 +354,31 @@ export const SettingsView: React.FC = () => {
             </div>
           </div>
         </div>
+      </section>
+
+      {/* Multi-Browser Cloud Sync */}
+      <section className="bg-[#090D0D] border border-[#00E5FF]/25 rounded-xl p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <Cloud className="w-4 h-4 text-[#00E5FF]" />
+            <h2 className="text-sm font-semibold text-[#E6F1EE]">Multi-Browser Cloud Sync</h2>
+          </div>
+          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#39FF88]/15 text-[#39FF88] border border-[#39FF88]/30">
+            Active
+          </span>
+        </div>
+        <p className="text-xs text-[#8A9D98] font-sans-ui">
+          Your vault is accessible from any browser (mobile, laptop, incognito, Vercel) by entering your Username and Rooh Key.
+        </p>
+        <button
+          type="button"
+          disabled={syncBusy}
+          onClick={handleSyncToCloud}
+          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold bg-[#00E5FF]/15 text-[#00E5FF] border border-[#00E5FF]/35 rounded-lg hover:bg-[#00E5FF]/25 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${syncBusy ? 'animate-spin' : ''}`} />
+          {syncBusy ? 'Syncing to Cloud...' : 'Sync Local Vault to Cloud Now'}
+        </button>
       </section>
 
       {/* Rotate Rooh Key */}

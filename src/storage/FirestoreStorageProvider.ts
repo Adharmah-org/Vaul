@@ -92,18 +92,20 @@ function clampString(value: string, maxLen: number): string {
   return value.length > maxLen ? value.slice(0, maxLen) : value;
 }
 
+const ACTIVE_VAULT_USER_ID_KEY = 'rooh_active_vault_id';
+
+export function getVaultDocId(username: string): string {
+  const clean = username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '_');
+  return `u_${clean}`;
+}
+
 function requireVerifiedUid(expectedUserId?: string): string {
-  const current = auth.currentUser;
-  if (!current) {
-    throw new Error('Sign in with Google first to connect your Cloud Vault session.');
+  if (expectedUserId && expectedUserId.trim()) {
+    return expectedUserId.trim();
   }
-  if (!current.emailVerified) {
-    throw new Error('A verified email account is required for Cloud Vault access.');
-  }
-  if (expectedUserId && current.uid !== expectedUserId) {
-    throw new Error('Authenticated cloud session does not match requested vault owner.');
-  }
-  return current.uid;
+  const active = sessionStorage.getItem(ACTIVE_VAULT_USER_ID_KEY);
+  if (active) return active;
+  throw new Error('Authentication required: No active vault session.');
 }
 
 export class FirestoreStorageProvider implements StorageProvider {
@@ -140,31 +142,31 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async hasAnyUser(): Promise<boolean> {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return false;
-    const status = await this.getCloudVaultStatus(uid);
+    const active = sessionStorage.getItem(ACTIVE_VAULT_USER_ID_KEY);
+    if (!active) return false;
+    const status = await this.getCloudVaultStatus(active);
     return status.exists;
   }
 
   async registerUser(username: string): Promise<RegisterResult> {
-    const uid = requireVerifiedUid();
-    const uCheck = validateUsername(username);
+    const cleanUsername = username.trim();
+    const uCheck = validateUsername(cleanUsername);
     if (!uCheck.valid) {
       throw new Error(uCheck.error || 'Invalid username.');
     }
 
+    const uid = getVaultDocId(cleanUsername);
     const path = `vaults/${uid}`;
     try {
       const existingSnap = await getDoc(this.vaultRef(uid));
       if (existingSnap.exists()) {
-        throw new Error('A Cloud Vault already exists for this Google account. Switch to Unlock Vault and sign in with your details.');
+        throw new Error('A vault already exists for this username. Switch to Sign In to unlock.');
       }
     } catch (error) {
       if (error instanceof Error && error.message.includes('already exists')) throw error;
       handleFirestoreError(error, OperationType.GET, path);
     }
 
-    const cleanUsername = username.trim();
     const roohKey = generateRoohKey();
     const roohKeyHash = await hashSecret(roohKey);
 
@@ -199,14 +201,37 @@ export class FirestoreStorageProvider implements StorageProvider {
       createdAt: now,
       expiresAt: now + DEFAULT_PREFERENCES.sessionDurationMinutes * 60 * 1000,
     };
+    sessionStorage.setItem(ACTIVE_VAULT_USER_ID_KEY, uid);
     sessionStorage.setItem(`${CLOUD_SESSION_KEY_PREFIX}${uid}`, JSON.stringify(session));
 
     return { user, roohKey, session };
   }
 
+  async syncUserToCloud(user: UserRecord): Promise<void> {
+    const uid = getVaultDocId(user.username);
+    const path = `vaults/${uid}`;
+    try {
+      const snap = await getDoc(this.vaultRef(uid));
+      if (!snap.exists()) {
+        await setDoc(this.vaultRef(uid), {
+          ownerUid: uid,
+          username: user.username,
+          usernameLower: user.username.toLowerCase(),
+          roohKeyHash: user.roohKeyHash,
+          preferences: DEFAULT_PREFERENCES,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+
   async authenticateUser(username: string, roohKey: string): Promise<LoginResult> {
-    const uid = requireVerifiedUid();
-    const cleanUsernameLower = username.trim().toLowerCase();
+    const cleanUsername = username.trim();
+    const cleanUsernameLower = cleanUsername.toLowerCase();
+    const uid = getVaultDocId(cleanUsername);
     const normalizedKey = normalizeRoohKey(roohKey);
     const path = `vaults/${uid}`;
 
@@ -214,7 +239,7 @@ export class FirestoreStorageProvider implements StorageProvider {
     try {
       const snap = await getDoc(this.vaultRef(uid));
       if (!snap.exists()) {
-        throw new Error('ACCESS DENIED: No Cloud Vault initialized for this Google account yet. Use Create Cloud Vault first.');
+        throw new Error('ACCESS DENIED: No vault found matching this username. Create a vault or check spelling.');
       }
       data = snap.data();
     } catch (error) {
@@ -252,6 +277,7 @@ export class FirestoreStorageProvider implements StorageProvider {
       createdAt: now,
       expiresAt: now + durationMs,
     };
+    sessionStorage.setItem(ACTIVE_VAULT_USER_ID_KEY, uid);
     sessionStorage.setItem(`${CLOUD_SESSION_KEY_PREFIX}${uid}`, JSON.stringify(session));
 
     return { user, session };
@@ -271,35 +297,38 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async getActiveSession(): Promise<{ session: SessionRecord; user: UserRecord } | null> {
-    const current = auth.currentUser;
-    if (!current || !current.emailVerified) return null;
+    const activeId = sessionStorage.getItem(ACTIVE_VAULT_USER_ID_KEY);
+    if (!activeId) return null;
 
-    const raw = sessionStorage.getItem(`${CLOUD_SESSION_KEY_PREFIX}${current.uid}`);
+    const raw = sessionStorage.getItem(`${CLOUD_SESSION_KEY_PREFIX}${activeId}`);
     if (!raw) return null;
 
     let session: SessionRecord;
     try {
       session = JSON.parse(raw) as SessionRecord;
     } catch {
-      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${current.uid}`);
+      sessionStorage.removeItem(ACTIVE_VAULT_USER_ID_KEY);
+      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${activeId}`);
       return null;
     }
 
-    if (!session || Date.now() > session.expiresAt || session.userId !== current.uid) {
-      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${current.uid}`);
+    if (!session || Date.now() > session.expiresAt || session.userId !== activeId) {
+      sessionStorage.removeItem(ACTIVE_VAULT_USER_ID_KEY);
+      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${activeId}`);
       return null;
     }
 
-    const path = `vaults/${current.uid}`;
+    const path = `vaults/${activeId}`;
     try {
-      const snap = await getDoc(this.vaultRef(current.uid));
+      const snap = await getDoc(this.vaultRef(activeId));
       if (!snap.exists()) {
-        sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${current.uid}`);
+        sessionStorage.removeItem(ACTIVE_VAULT_USER_ID_KEY);
+        sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${activeId}`);
         return null;
       }
       const data = snap.data();
       const user: UserRecord = {
-        id: current.uid,
+        id: activeId,
         username: String(data.username),
         roohKeyHash: String(data.roohKeyHash),
         createdAt: toMillis(data.createdAt),
@@ -312,10 +341,11 @@ export class FirestoreStorageProvider implements StorageProvider {
   }
 
   async logout(_sessionId: string): Promise<void> {
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${uid}`);
+    const activeId = sessionStorage.getItem(ACTIVE_VAULT_USER_ID_KEY);
+    if (activeId) {
+      sessionStorage.removeItem(`${CLOUD_SESSION_KEY_PREFIX}${activeId}`);
     }
+    sessionStorage.removeItem(ACTIVE_VAULT_USER_ID_KEY);
     this.blobCache.clear();
   }
 

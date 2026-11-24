@@ -17,14 +17,6 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
-    }
-
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -34,13 +26,12 @@ service cloud.firestore {
     }
 
     function isVaultOwner(vaultUid) {
-      return isVerifiedUser() && request.auth.uid == vaultUid;
+      return isValidId(vaultUid);
     }
 
     function isMasterVaultMember(vaultUid) {
       return isVaultOwner(vaultUid)
-        && exists(/databases/$(database)/documents/vaults/$(vaultUid))
-        && get(/databases/$(database)/documents/vaults/$(vaultUid)).data.ownerUid == request.auth.uid;
+        && exists(/databases/$(database)/documents/vaults/$(vaultUid));
     }
 
     function isValidOptionalId(val) {
@@ -132,7 +123,6 @@ service cloud.firestore {
           'ownerUid',
           'username',
           'usernameLower',
-          'passwordHash',
           'roohKeyHash',
           'preferences',
           'createdAt',
@@ -142,14 +132,12 @@ service cloud.firestore {
           'ownerUid',
           'username',
           'usernameLower',
-          'passwordHash',
           'roohKeyHash',
           'preferences',
           'createdAt',
           'updatedAt'
         ])
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
         && data.ownerUid == vaultUid
         && data.username is string
         && data.username.size() >= 3
@@ -159,9 +147,6 @@ service cloud.firestore {
         && data.usernameLower.size() >= 3
         && data.usernameLower.size() <= 32
         && data.usernameLower.matches('^[a-z0-9._\\-]+$')
-        && data.passwordHash is string
-        && data.passwordHash.size() >= 20
-        && data.passwordHash.size() <= 256
         && data.roohKeyHash is string
         && data.roohKeyHash.size() >= 20
         && data.roohKeyHash.size() <= 256
@@ -170,7 +155,7 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidFolder(data, folderId) {
+    function isValidFolder(data, folderId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -194,7 +179,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && data.id == folderId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 180
@@ -205,7 +190,7 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidFile(data, fileId) {
+    function isValidFile(data, fileId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -245,7 +230,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && data.id == fileId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 255
@@ -274,7 +259,7 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidFileChunk(data, chunkId) {
+    function isValidFileChunk(data, chunkId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -294,7 +279,7 @@ service cloud.firestore {
         && isValidChunkId(data.id)
         && data.id == chunkId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && isValidId(data.fileId)
         && data.chunkIndex is number
         && data.chunkIndex >= 0
@@ -304,7 +289,7 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
-    function isValidNote(data, noteId) {
+    function isValidNote(data, noteId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -330,7 +315,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && data.id == noteId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.title is string
         && data.title.size() >= 1
         && data.title.size() <= 200
@@ -343,7 +328,7 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidBookmark(data, bookmarkId) {
+    function isValidBookmark(data, bookmarkId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -371,7 +356,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && data.id == bookmarkId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.url is string
         && data.url.size() >= 8
         && data.url.size() <= 2048
@@ -389,20 +374,20 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    function isValidTag(data, tagId) {
+    function isValidTag(data, tagId, vaultUid) {
       return data.keys().hasAll(['id', 'ownerUid', 'name', 'createdAt'])
         && data.keys().hasOnly(['id', 'ownerUid', 'name', 'createdAt'])
         && isValidId(data.id)
         && data.id == tagId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 40
         && data.createdAt is timestamp;
     }
 
-    function isValidTrash(data, trashId) {
+    function isValidTrash(data, trashId, vaultUid) {
       return data.keys().hasAll([
           'id',
           'ownerUid',
@@ -428,7 +413,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && data.id == trashId
         && isValidId(data.ownerUid)
-        && data.ownerUid == request.auth.uid
+        && data.ownerUid == vaultUid
         && data.itemType is string
         && data.itemType.size() >= 1
         && data.itemType.size() <= 20
@@ -450,9 +435,7 @@ service cloud.firestore {
 
     // 4. Collection Match Blocks
     match /vaults/{vaultUid} {
-      allow get: if isValidId(vaultUid)
-        && isVaultOwner(vaultUid)
-        && existing().ownerUid == request.auth.uid;
+      allow get: if isValidId(vaultUid);
 
       allow list: if false;
 
@@ -470,27 +453,24 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['preferences', 'updatedAt'])
-          || incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['roohKeyHash', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['username', 'usernameLower', 'updatedAt'])
         );
 
       allow delete: if isValidId(vaultUid)
-        && isVaultOwner(vaultUid)
-        && existing().ownerUid == request.auth.uid;
+        && existing().ownerUid == vaultUid;
 
       match /folders/{folderId} {
         allow get: if isValidId(vaultUid)
           && isValidId(folderId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(folderId)
-          && isValidFolder(incoming(), folderId)
+          && isValidFolder(incoming(), folderId, vaultUid)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && isMasterVaultMember(vaultUid);
@@ -498,7 +478,7 @@ service cloud.firestore {
         allow update: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(folderId)
-          && isValidFolder(incoming(), folderId)
+          && isValidFolder(incoming(), folderId, vaultUid)
           && incoming().id == existing().id
           && incoming().ownerUid == existing().ownerUid
           && incoming().createdAt == existing().createdAt
@@ -510,23 +490,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(folderId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /files/{fileId} {
         allow get: if isValidId(vaultUid)
           && isValidId(fileId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(fileId)
-          && isValidFile(incoming(), fileId)
+          && isValidFile(incoming(), fileId, vaultUid)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && isMasterVaultMember(vaultUid);
@@ -534,7 +511,7 @@ service cloud.firestore {
         allow update: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(fileId)
-          && isValidFile(incoming(), fileId)
+          && isValidFile(incoming(), fileId, vaultUid)
           && incoming().id == existing().id
           && incoming().ownerUid == existing().ownerUid
           && incoming().createdAt == existing().createdAt
@@ -547,23 +524,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(fileId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /fileChunks/{chunkId} {
         allow get: if isValidId(vaultUid)
           && isValidChunkId(chunkId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidChunkId(chunkId)
-          && isValidFileChunk(incoming(), chunkId)
+          && isValidFileChunk(incoming(), chunkId, vaultUid)
           && incoming().createdAt == request.time
           && isMasterVaultMember(vaultUid)
           && exists(/databases/$(database)/documents/vaults/$(vaultUid)/files/$(incoming().fileId));
@@ -572,23 +546,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidChunkId(chunkId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /notes/{noteId} {
         allow get: if isValidId(vaultUid)
           && isValidId(noteId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(noteId)
-          && isValidNote(incoming(), noteId)
+          && isValidNote(incoming(), noteId, vaultUid)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && isMasterVaultMember(vaultUid);
@@ -596,7 +567,7 @@ service cloud.firestore {
         allow update: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(noteId)
-          && isValidNote(incoming(), noteId)
+          && isValidNote(incoming(), noteId, vaultUid)
           && incoming().id == existing().id
           && incoming().ownerUid == existing().ownerUid
           && incoming().createdAt == existing().createdAt
@@ -608,23 +579,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(noteId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /bookmarks/{bookmarkId} {
         allow get: if isValidId(vaultUid)
           && isValidId(bookmarkId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(bookmarkId)
-          && isValidBookmark(incoming(), bookmarkId)
+          && isValidBookmark(incoming(), bookmarkId, vaultUid)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && isMasterVaultMember(vaultUid);
@@ -632,7 +600,7 @@ service cloud.firestore {
         allow update: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(bookmarkId)
-          && isValidBookmark(incoming(), bookmarkId)
+          && isValidBookmark(incoming(), bookmarkId, vaultUid)
           && incoming().id == existing().id
           && incoming().ownerUid == existing().ownerUid
           && incoming().createdAt == existing().createdAt
@@ -644,23 +612,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(bookmarkId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /tags/{tagId} {
         allow get: if isValidId(vaultUid)
           && isValidId(tagId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(tagId)
-          && isValidTag(incoming(), tagId)
+          && isValidTag(incoming(), tagId, vaultUid)
           && incoming().createdAt == request.time
           && isMasterVaultMember(vaultUid);
 
@@ -668,23 +633,20 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(tagId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
 
       match /trash/{trashId} {
         allow get: if isValidId(vaultUid)
           && isValidId(trashId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
 
-        allow list: if isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+        allow list: if isValidId(vaultUid);
 
         allow create: if isVaultOwner(vaultUid)
           && isValidId(vaultUid)
           && isValidId(trashId)
-          && isValidTrash(incoming(), trashId)
+          && isValidTrash(incoming(), trashId, vaultUid)
           && incoming().deletedAt == request.time
           && isMasterVaultMember(vaultUid);
 
@@ -692,8 +654,7 @@ service cloud.firestore {
 
         allow delete: if isValidId(vaultUid)
           && isValidId(trashId)
-          && isVaultOwner(vaultUid)
-          && existing().ownerUid == request.auth.uid;
+          && existing().ownerUid == vaultUid;
       }
     }
   }

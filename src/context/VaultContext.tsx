@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { generateUuid, normalizeRoohKey } from '../services/crypto';
-import { IndexedDBStorageProvider } from '../storage/IndexedDBStorageProvider';
+import { HybridVaultStorageProvider } from '../storage/HybridVaultStorageProvider';
 import { StorageProvider } from '../storage/StorageProvider';
 import {
   BookmarkRecord,
@@ -75,7 +75,7 @@ const DEFAULT_PREFERENCES: VaultPreferences = {
 
 const VaultContext = createContext<VaultContextValue | null>(null);
 
-const storageSingleton = new IndexedDBStorageProvider();
+const storageSingleton = new HybridVaultStorageProvider();
 
 export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserRecord | null>(null);
