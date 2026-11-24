@@ -1,0 +1,6 @@
+{
+  "name": "rooh.clouds",
+  "description": "Your memories. Your universe. Your private cloud. A mysterious hacker-terminal personal digital vault built with local IndexedDB storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

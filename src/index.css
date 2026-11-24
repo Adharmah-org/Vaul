@@ -1,0 +1,183 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --bg-canvas: #030505;
+    --bg-panel: #090d0d;
+    --bg-elevated: #0f1515;
+    --accent-primary: #39ff88;
+    --accent-secondary: #00e5ff;
+  }
+
+  html {
+    font-family: var(--font-mono);
+    background-color: #030505;
+    color: #e6f1ee;
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: #030505;
+    overflow-x: hidden;
+  }
+}
+
+.font-sans-ui {
+  font-family: var(--font-sans);
+}
+
+.font-mono-ui {
+  font-family: var(--font-mono);
+}
+
+/* Subtle terminal scanlines overlay (non-blocking, toggleable) */
+.rooh-scanlines {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0) 50%,
+    rgba(0, 0, 0, 0.22) 50%
+  );
+  background-size: 100% 4px;
+}
+
+/* Restrained glitch hover effect */
+@keyframes rooh-glitch-shift {
+  0% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1px, 0.5px);
+  }
+  50% {
+    transform: translate(1px, -0.5px);
+  }
+  75% {
+    transform: translate(-0.5px, 0);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+.rooh-glitch-hover:hover {
+  animation: rooh-glitch-shift 180ms steps(2, end) 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rooh-glitch-hover:hover {
+    animation: none;
+  }
+  .rooh-cursor-blink {
+    animation: none !important;
+  }
+}
+
+@keyframes rooh-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.rooh-cursor-blink {
+  animation: rooh-blink 1s step-end infinite;
+}
+
+/* Custom thin dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #050808;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(57, 255, 136, 0.22);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(57, 255, 136, 0.4);
+}
+
+/* Sanitized Markdown preview typography */
+.rooh-markdown {
+  font-family: var(--font-sans);
+  color: #d6e4e0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.rooh-markdown h1,
+.rooh-markdown h2,
+.rooh-markdown h3,
+.rooh-markdown h4 {
+  font-family: var(--font-mono);
+  color: #e6f1ee;
+  font-weight: 700;
+  margin-top: 1.1em;
+  margin-bottom: 0.45em;
+  line-height: 1.3;
+}
+.rooh-markdown h1 { font-size: 1.35rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.3em; }
+.rooh-markdown h2 { font-size: 1.125rem; color: #39ff88; }
+.rooh-markdown h3 { font-size: 0.975rem; color: #00e5ff; }
+.rooh-markdown p { margin: 0.65em 0; }
+.rooh-markdown ul,
+.rooh-markdown ol { margin: 0.65em 0; padding-left: 1.35em; }
+.rooh-markdown ul { list-style-type: disc; }
+.rooh-markdown ol { list-style-type: decimal; }
+.rooh-markdown li { margin: 0.25em 0; }
+.rooh-markdown strong { color: #ffffff; font-weight: 600; }
+.rooh-markdown a { color: #00e5ff; text-decoration: underline; }
+.rooh-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: #39ff88;
+  background: #030505;
+  padding: 0.15em 0.38em;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.rooh-markdown pre {
+  background: #030505;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0.85em 0;
+}
+.rooh-markdown pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #e6f1ee;
+}
+.rooh-markdown blockquote {
+  border-left: 2px solid rgba(57, 255, 136, 0.5);
+  padding-left: 0.85rem;
+  color: #8a9d98;
+  margin: 0.75em 0;
+}
+.rooh-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.85em 0;
+  font-size: 0.8rem;
+}
+.rooh-markdown th,
+.rooh-markdown td {
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+}
+.rooh-markdown th {
+  background: #090d0d;
+  color: #e6f1ee;
+}
+
