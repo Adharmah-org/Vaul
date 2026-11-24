@@ -21,8 +21,10 @@ import {
   VaultPreferences,
 } from '../types/vault';
 import {
+  generateRoohKey,
   generateSessionToken,
   generateUuid,
+  hashSecret,
   isValidRoohKeyFormat,
   normalizeRoohKey,
   verifySecret,
@@ -778,11 +780,177 @@ export class HybridVaultStorageProvider implements StorageProvider {
 
   async rotateRoohKey(userId: string, currentRoohKey: string): Promise<string> {
     const newKey = await this.local.rotateRoohKey(userId, currentRoohKey);
-    try {
-      await this.cloud.rotateRoohKey(userId, currentRoohKey);
-    } catch (err) {
-      console.warn('Cloud key rotation notice:', err);
+    const updatedUser = await db.users.get(userId);
+    if (updatedUser) {
+      await this.cloud
+        .updateVaultRoohKeyHash(userId, updatedUser.roohKeyHash, updatedUser)
+        .catch((err) => console.warn('Cloud key rotation notice:', err));
     }
+    return newKey;
+  }
+
+  /**
+   * Checks whether this browser holds local IndexedDB vault/session trust for the given
+   * username, email alias, or Vault UUID so Forgot Key recovery can run securely on this browser.
+   */
+  async getBrowserRecoveryInfo(identifier: string): Promise<{
+    found: boolean;
+    vaultId: string;
+    username: string;
+    hasLocalTrust: boolean;
+    boundDriveEmail?: string;
+  }> {
+    const clean = identifier.trim();
+    const cleanLower = clean.toLowerCase();
+    if (!clean) {
+      return { found: false, vaultId: '', username: '', hasLocalTrust: false };
+    }
+
+    await this.reconcileCanonicalLocalUsers();
+    const seed = findCanonicalSeedByInput(clean);
+
+    const localUsers = await db.users.toArray();
+    const localSessions = await db.sessions.toArray();
+
+    const matchesIdentifier = (uid: string, uname: string): boolean => {
+      if (uid.toLowerCase() === cleanLower || uname.toLowerCase() === cleanLower) return true;
+      if (seed) {
+        return (
+          uid.toLowerCase() === seed.vaultId.toLowerCase() ||
+          uname.toLowerCase() === seed.usernameLower ||
+          (seed.aliases?.some((a) => a.toLowerCase() === uname.toLowerCase()) ?? false) ||
+          seed.legacyVaultIds.some((lid) => lid.toLowerCase() === uid.toLowerCase())
+        );
+      }
+      return false;
+    };
+
+    const matchedLocalUser = localUsers.find((u) => matchesIdentifier(u.id, u.username));
+    const matchedLocalSession = localSessions.find((s) => matchesIdentifier(s.userId, s.username));
+
+    const cloudInfo = await this.cloud.resolveVaultForRecovery(clean).catch(() => null);
+    const vaultId = seed?.vaultId || matchedLocalUser?.id || cloudInfo?.vaultId || '';
+    const username = seed?.username || matchedLocalUser?.username || cloudInfo?.username || '';
+    const hasLocalTrust = Boolean(matchedLocalUser || matchedLocalSession);
+
+    return {
+      found: Boolean(vaultId),
+      vaultId,
+      username,
+      hasLocalTrust,
+      boundDriveEmail: seed?.driveAccountEmail || cloudInfo?.boundDriveEmail,
+    };
+  }
+
+  private async issueReplacementKeyAndSession(
+    vaultId: string,
+    username: string
+  ): Promise<RegisterResult> {
+    const newRoohKey = generateRoohKey();
+    const newHash = await hashSecret(newRoohKey);
+    const now = Date.now();
+
+    const existingLocal = await db.users.get(vaultId);
+    const user: UserRecord = existingLocal
+      ? { ...existingLocal, username, roohKeyHash: newHash, updatedAt: now }
+      : { id: vaultId, username, roohKeyHash: newHash, createdAt: now, updatedAt: now };
+
+    await db.users.put(user);
+
+    const prefs = await this.local.getPreferences(vaultId);
+    const session: SessionRecord = {
+      id: generateUuid(),
+      userId: vaultId,
+      username,
+      token: generateSessionToken(),
+      createdAt: now,
+      expiresAt: now + prefs.sessionDurationMinutes * 60 * 1000,
+    };
+    await db.sessions.put(session);
+    sessionStorage.setItem(ACTIVE_SESSION_ID_KEY, session.id);
+
+    await this.cloud.updateVaultRoohKeyHash(vaultId, newHash, user).catch(() => {});
+    await this.mergeCloudToLocal(vaultId, user).catch(() => {});
+    this.syncLocalToCloud(vaultId).catch(() => {});
+
+    return { user, roohKey: newRoohKey, session };
+  }
+
+  /**
+   * Resets a forgotten Rooh Key from the Sign In screen when BOTH:
+   * 1) The browser has prior local IndexedDB vault/session trust for the vault, AND
+   * 2) The user confirms the exact Vault UUID.
+   */
+  async resetForgottenRoohKeyOnThisBrowser(
+    identifier: string,
+    confirmVaultUuid: string
+  ): Promise<RegisterResult> {
+    const cleanUuid = confirmVaultUuid.trim();
+    if (!cleanUuid) {
+      throw new Error('Vault UUID confirmation is required.');
+    }
+
+    const info = await this.getBrowserRecoveryInfo(identifier);
+    if (!info.found || !info.vaultId) {
+      throw new Error('No vault found matching that Username or Email.');
+    }
+    if (!info.hasLocalTrust) {
+      throw new Error(
+        'This browser does not have a prior local vault session in IndexedDB. Use a browser where you previously signed in or verify your bound Google account.'
+      );
+    }
+    if (cleanUuid.toLowerCase() !== info.vaultId.toLowerCase()) {
+      throw new Error('Vault UUID does not match this vault. Check your Vault UUID and try again.');
+    }
+
+    return this.issueReplacementKeyAndSession(info.vaultId, info.username);
+  }
+
+  /**
+   * Resets a forgotten Rooh Key after verifying Google account ownership matches the
+   * vault's bound email (e.g. shunyavansh@gmail.com).
+   */
+  async resetForgottenRoohKeyViaGoogleEmail(
+    identifier: string,
+    verifiedEmail: string | null
+  ): Promise<RegisterResult> {
+    const info = await this.getBrowserRecoveryInfo(identifier);
+    if (!info.found || !info.vaultId) {
+      throw new Error('No vault found matching that Username or Email.');
+    }
+    if (!info.boundDriveEmail) {
+      throw new Error('This vault does not have a bound recovery email configured.');
+    }
+    if (!verifiedEmail || verifiedEmail.toLowerCase() !== info.boundDriveEmail.toLowerCase()) {
+      throw new Error(
+        `Signed-in Google account (${verifiedEmail || 'unknown'}) does not match the bound vault email (${info.boundDriveEmail}).`
+      );
+    }
+
+    return this.issueReplacementKeyAndSession(info.vaultId, info.username);
+  }
+
+  /**
+   * Generates a replacement Rooh Key directly from an already-authenticated active browser session
+   * (used in Settings when the user forgot their old key while currently signed in).
+   */
+  async resetRoohKeyFromActiveSession(userId: string): Promise<string> {
+    const active = await this.getActiveSession();
+    if (!active || active.user.id !== userId) {
+      throw new Error('Active authenticated session required to reset Rooh Key.');
+    }
+
+    const newKey = generateRoohKey();
+    const newHash = await hashSecret(newKey);
+    const now = Date.now();
+    const updatedUser: UserRecord = {
+      ...active.user,
+      roohKeyHash: newHash,
+      updatedAt: now,
+    };
+
+    await db.users.put(updatedUser);
+    await this.cloud.updateVaultRoohKeyHash(active.user.id, newHash, updatedUser).catch(() => {});
     return newKey;
   }
 

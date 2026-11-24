@@ -602,6 +602,107 @@ export class FirestoreStorageProvider implements StorageProvider {
     return newKey;
   }
 
+  async updateVaultRoohKeyHash(
+    userId: string,
+    newHash: string,
+    fallbackUser?: UserRecord
+  ): Promise<void> {
+    const uid = requireVerifiedUid(userId);
+    const path = `vaults/${uid}`;
+    try {
+      const snap = await getDoc(this.vaultRef(uid));
+      if (snap.exists()) {
+        await updateDoc(this.vaultRef(uid), {
+          roohKeyHash: newHash,
+          updatedAt: serverTimestamp(),
+        });
+      } else if (fallbackUser) {
+        await setDoc(this.vaultRef(uid), {
+          ownerUid: uid,
+          username: fallbackUser.username,
+          usernameLower: fallbackUser.username.toLowerCase(),
+          roohKeyHash: newHash,
+          preferences: DEFAULT_PREFERENCES,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        await this.ensureVaultAlias(fallbackUser.username, uid);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+
+  async resolveVaultForRecovery(identifier: string): Promise<{
+    vaultId: string;
+    username: string;
+    roohKeyHash: string;
+    boundDriveEmail?: string;
+  } | null> {
+    const clean = identifier.trim();
+    const cleanLower = clean.toLowerCase();
+    if (!clean) return null;
+
+    const seed = findCanonicalSeedByInput(clean);
+    const candidates: string[] = [];
+    if (seed) candidates.push(seed.vaultId);
+    if (isUuidLike(clean) && !candidates.includes(clean)) candidates.push(clean);
+
+    const aliasKeys = seed
+      ? [seed.usernameLower, ...(seed.aliases || []).map((a) => a.toLowerCase())]
+      : [cleanLower];
+    for (const k of aliasKeys) {
+      if (k.length >= 3 && k.length <= 32 && /^[a-z0-9._-]+$/.test(k)) {
+        try {
+          const aliasSnap = await getDoc(this.aliasRef(k));
+          if (aliasSnap.exists()) {
+            const vid = String(aliasSnap.data().vaultId || '');
+            if (vid && !candidates.includes(vid)) candidates.push(vid);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (seed) {
+      for (const lid of seed.legacyVaultIds) {
+        if (!candidates.includes(lid)) candidates.push(lid);
+      }
+    } else if (!isUuidLike(clean)) {
+      const docId = getVaultDocId(clean);
+      if (!candidates.includes(docId)) candidates.push(docId);
+    }
+
+    for (const candidateId of candidates) {
+      try {
+        const snap = await getDoc(this.vaultRef(candidateId));
+        if (snap.exists()) {
+          const data = snap.data();
+          return {
+            vaultId: seed ? seed.vaultId : candidateId,
+            username: seed ? seed.username : String(data.username || clean),
+            roohKeyHash: String(data.roohKeyHash || seed?.roohKeyHash || ''),
+            boundDriveEmail: seed?.driveAccountEmail,
+          };
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    if (seed) {
+      return {
+        vaultId: seed.vaultId,
+        username: seed.username,
+        roohKeyHash: seed.roohKeyHash,
+        boundDriveEmail: seed.driveAccountEmail,
+      };
+    }
+
+    return null;
+  }
+
   async deleteAccount(userId: string, roohKeyInput: string): Promise<void> {
     const uid = requireVerifiedUid(userId);
     const path = `vaults/${uid}`;

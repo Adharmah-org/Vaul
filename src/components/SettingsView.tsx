@@ -47,6 +47,7 @@ export const SettingsView: React.FC = () => {
     disconnectDrive,
     otherLocalFilesCount,
     consolidateLocalFiles,
+    resetKeyFromActiveSession,
   } = useVault();
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -55,6 +56,8 @@ export const SettingsView: React.FC = () => {
   const [currentRoohKey, setCurrentRoohKey] = useState('');
   const [rotatedKeyResult, setRotatedKeyResult] = useState<string | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
+  const [confirmResetKeyOpen, setConfirmResetKeyOpen] = useState(false);
+  const [resetKeyBusy, setResetKeyBusy] = useState(false);
 
   // Archive export/import
   const [exportBusy, setExportBusy] = useState(false);
@@ -681,13 +684,61 @@ export const SettingsView: React.FC = () => {
               {keyBusy ? 'Rotating...' : 'Rotate Key'}
             </button>
           </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setConfirmResetKeyOpen(true)}
+              className="text-[11px] text-[#00E5FF] hover:underline"
+            >
+              Forgot current key? Reset using this active session
+            </button>
+          </div>
         </form>
 
         {rotatedKeyResult && (
-          <div className="p-3.5 bg-[#39FF88]/10 border border-[#39FF88]/30 rounded-lg space-y-2">
+          <div className="p-3.5 bg-[#39FF88]/10 border border-[#39FF88]/30 rounded-lg space-y-2.5">
             <p className="text-xs font-semibold text-[#39FF88]">New Rooh Key Generated Successfully:</p>
             <div className="p-2.5 bg-[#030505] border border-white/15 rounded font-mono text-sm text-[#00E5FF] tracking-wider select-all">
               {rotatedKeyResult}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(rotatedKeyResult).catch(() => {});
+                  addToast({ type: 'success', title: 'Rooh Key copied' });
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded border border-[#39FF88]/35 bg-[#39FF88]/10 text-[#39FF88] hover:bg-[#39FF88]/20"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Copy Key
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const content = [
+                    'rooh.clouds Recovery Key Backup',
+                    '==============================',
+                    `Username: ${user.username}`,
+                    `Vault ID: ${user.id}`,
+                    `Rooh Key: ${rotatedKeyResult}`,
+                    `Generated: ${new Date().toISOString()}`,
+                  ].join('\n');
+                  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `rooh-clouds-key-${user.username}.txt`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded border border-[#00E5FF]/35 bg-[#00E5FF]/10 text-[#00E5FF] hover:bg-[#00E5FF]/20"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download .txt
+              </button>
             </div>
             <p className="text-[11px] text-[#A3B5B0]">Save this key immediately. It will not be shown again.</p>
           </div>
@@ -809,6 +860,55 @@ export const SettingsView: React.FC = () => {
             </button>
           </div>
         </form>
+      </VaultModal>
+
+      <VaultModal
+        open={confirmResetKeyOpen}
+        title="Reset Forgotten Rooh Key"
+        onClose={() => setConfirmResetKeyOpen(false)}
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-[#A3B5B0] font-sans-ui leading-relaxed">
+            Generate a brand-new Rooh Key for <strong className="text-[#E6F1EE]">{user.username}</strong> (<code className="text-[#00E5FF]">{user.id}</code>) using your currently unlocked session. Your previous key will stop working for future sign-ins, though files previously encrypted with AES-256-GCM still require the old key to decrypt.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmResetKeyOpen(false)}
+              className="px-4 py-2 text-xs text-[#8A9D98] border border-white/10 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={resetKeyBusy}
+              onClick={async () => {
+                setResetKeyBusy(true);
+                try {
+                  const newKey = await resetKeyFromActiveSession();
+                  setRotatedKeyResult(newKey);
+                  setConfirmResetKeyOpen(false);
+                  addToast({
+                    type: 'success',
+                    title: 'Replacement Rooh Key generated',
+                    description: 'Copy or download your new key now.',
+                  });
+                } catch (err) {
+                  addToast({
+                    type: 'error',
+                    title: 'Reset failed',
+                    description: err instanceof Error ? err.message : 'Unable to reset Rooh Key.',
+                  });
+                } finally {
+                  setResetKeyBusy(false);
+                }
+              }}
+              className="px-4 py-2 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg hover:bg-[#52FF99] disabled:opacity-50"
+            >
+              {resetKeyBusy ? 'Generating...' : 'Generate New Rooh Key'}
+            </button>
+          </div>
+        </div>
       </VaultModal>
     </div>
   );

@@ -32,6 +32,9 @@ export const AuthTerminal: React.FC = () => {
     clearPendingRoohKey,
     register,
     login,
+    checkRecoveryEligibility,
+    recoverKeyOnThisBrowser,
+    recoverKeyViaGoogle,
     user,
     addToast,
     preferences,
@@ -75,6 +78,88 @@ export const AuthTerminal: React.FC = () => {
   const [keyCopied, setKeyCopied] = useState(false);
   const [keySavedConfirmed, setKeySavedConfirmed] = useState(false);
   const [unlockerOpen, setUnlockerOpen] = useState(false);
+
+  // Forgot Rooh Key modal state
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [recoverIdentifier, setRecoverIdentifier] = useState('');
+  const [recoverVaultUuid, setRecoverVaultUuid] = useState('');
+  const [recoverBusy, setRecoverBusy] = useState(false);
+  const [recoverError, setRecoverError] = useState<string | null>(null);
+  const [recoveryInfo, setRecoveryInfo] = useState<{
+    found: boolean;
+    vaultId: string;
+    username: string;
+    hasLocalTrust: boolean;
+    boundDriveEmail?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!forgotOpen) return;
+    const clean = recoverIdentifier.trim();
+    if (clean.length < 3) {
+      setRecoveryInfo(null);
+      return;
+    }
+    let active = true;
+    const timer = setTimeout(() => {
+      checkRecoveryEligibility(clean)
+        .then((info) => {
+          if (active) setRecoveryInfo(info);
+        })
+        .catch(() => {
+          if (active) setRecoveryInfo(null);
+        });
+    }, 220);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [forgotOpen, recoverIdentifier, checkRecoveryEligibility]);
+
+  const openForgotModal = () => {
+    setRecoverIdentifier(username.trim());
+    setRecoverVaultUuid('');
+    setRecoverError(null);
+    setRecoveryInfo(null);
+    setForgotOpen(true);
+  };
+
+  const handleBrowserRecoverSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoverBusy(true);
+    setRecoverError(null);
+    try {
+      await recoverKeyOnThisBrowser(recoverIdentifier, recoverVaultUuid);
+      setForgotOpen(false);
+      addToast({
+        type: 'success',
+        title: 'New Rooh Key issued',
+        description: 'Save your replacement key immediately.',
+      });
+    } catch (err) {
+      setRecoverError(err instanceof Error ? err.message : 'Unable to recover Rooh Key.');
+    } finally {
+      setRecoverBusy(false);
+    }
+  };
+
+  const handleGoogleRecover = async () => {
+    setRecoverBusy(true);
+    setRecoverError(null);
+    try {
+      await recoverKeyViaGoogle(recoverIdentifier);
+      setForgotOpen(false);
+      addToast({
+        type: 'success',
+        title: 'Verified via Google & new Rooh Key issued',
+        description: 'Save your replacement key immediately.',
+      });
+    } catch (err) {
+      setRecoverError(err instanceof Error ? err.message : 'Google verification failed.');
+    } finally {
+      setRecoverBusy(false);
+    }
+  };
 
   const usernameValidation = useMemo(() => validateUsername(username), [username]);
 
@@ -438,9 +523,18 @@ export const AuthTerminal: React.FC = () => {
               </div>
 
               <div>
-                <label htmlFor="login-rooh-key" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
-                  Rooh Key
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label htmlFor="login-rooh-key" className="block text-xs font-medium text-[#A3B5B0]">
+                    Rooh Key
+                  </label>
+                  <button
+                    type="button"
+                    onClick={openForgotModal}
+                    className="text-[11px] text-[#00E5FF] hover:underline"
+                  >
+                    Forgot Rooh Key?
+                  </button>
+                </div>
                 <input
                   id="login-rooh-key"
                   type="text"
@@ -518,6 +612,112 @@ export const AuthTerminal: React.FC = () => {
         onClose={() => setUnlockerOpen(false)}
       >
         <RoohUnlockerView compact />
+      </VaultModal>
+
+      <VaultModal
+        open={forgotOpen}
+        title="Forgot Rooh Key — Browser Recovery"
+        onClose={() => setForgotOpen(false)}
+      >
+        <form onSubmit={handleBrowserRecoverSubmit} className="space-y-4">
+          <p className="text-xs text-[#A3B5B0] font-sans-ui leading-relaxed">
+            Reset your Rooh Key from a browser where you have previously unlocked this vault (verified via local IndexedDB trust + your exact Vault UUID).
+          </p>
+
+          {recoverError && (
+            <div
+              role="alert"
+              className="bg-red-500/10 border border-red-500/35 rounded-lg px-3.5 py-2.5 text-xs text-red-300"
+            >
+              {recoverError}
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="recover-identifier" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
+              Username or Bound Email
+            </label>
+            <input
+              id="recover-identifier"
+              type="text"
+              required
+              value={recoverIdentifier}
+              onChange={(e) => setRecoverIdentifier(e.target.value)}
+              placeholder="tejaspphirake or shunyavansh@gmail.com"
+              className="w-full bg-[#030505] border border-white/15 focus:border-[#39FF88] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#E6F1EE] placeholder:text-[#4F615C]"
+            />
+          </div>
+
+          {recoveryInfo && (
+            <div
+              className={`rounded-lg p-3 text-[11px] font-sans-ui border ${
+                recoveryInfo.found && recoveryInfo.hasLocalTrust
+                  ? 'bg-[#39FF88]/10 border-[#39FF88]/30 text-[#A3B5B0]'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+              }`}
+            >
+              {!recoveryInfo.found ? (
+                <span>No matching vault found yet for that identifier.</span>
+              ) : recoveryInfo.hasLocalTrust ? (
+                <span>
+                  Verified: This browser has prior local vault trust for{' '}
+                  <strong className="text-[#39FF88]">{recoveryInfo.username}</strong>. Confirm your Vault UUID below to generate a replacement Rooh Key.
+                </span>
+              ) : (
+                <span>
+                  No prior local IndexedDB session was found on this browser for{' '}
+                  <strong>{recoveryInfo.username}</strong>. Open a previously logged-in browser or verify your bound Google account below.
+                </span>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="recover-vault-uuid" className="block text-xs font-medium text-[#A3B5B0] mb-1.5">
+              Confirm Vault UUID
+            </label>
+            <input
+              id="recover-vault-uuid"
+              type="text"
+              required={Boolean(!recoveryInfo || recoveryInfo.hasLocalTrust)}
+              value={recoverVaultUuid}
+              onChange={(e) => setRecoverVaultUuid(e.target.value)}
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              className="w-full bg-[#030505] border border-white/15 focus:border-[#00E5FF] focus:outline-none rounded-lg px-3 py-2 text-xs text-[#00E5FF] font-mono placeholder:text-[#4F615C]"
+            />
+          </div>
+
+          <div className="bg-[#0F1515] border border-white/10 rounded-lg p-3 text-[11px] text-[#8A9D98] font-sans-ui">
+            Previously AES-256-GCM encrypted files or downloaded <code className="text-[#E6F1EE]">.rooh</code> capsules encrypted with your old key still require the old key to decrypt.
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setForgotOpen(false)}
+              className="px-3.5 py-2 text-xs text-[#8A9D98] border border-white/10 rounded-lg hover:text-[#E6F1EE]"
+            >
+              Cancel
+            </button>
+            {recoveryInfo?.found && recoveryInfo.boundDriveEmail && !recoveryInfo.hasLocalTrust && (
+              <button
+                type="button"
+                disabled={recoverBusy}
+                onClick={handleGoogleRecover}
+                className="px-3.5 py-2 text-xs font-semibold bg-[#00E5FF]/15 text-[#00E5FF] border border-[#00E5FF]/35 rounded-lg hover:bg-[#00E5FF]/25 disabled:opacity-50"
+              >
+                {recoverBusy ? 'Verifying...' : `Verify Google (${recoveryInfo.boundDriveEmail})`}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={recoverBusy || Boolean(recoveryInfo && !recoveryInfo.hasLocalTrust)}
+              className="px-4 py-2 text-xs font-semibold bg-[#39FF88] text-[#030505] rounded-lg hover:bg-[#52FF99] disabled:opacity-50"
+            >
+              {recoverBusy ? 'Resetting...' : 'Reset & Generate New Key'}
+            </button>
+          </div>
+        </form>
       </VaultModal>
     </div>
   );

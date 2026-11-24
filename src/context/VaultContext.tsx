@@ -67,6 +67,16 @@ interface VaultContextValue {
   consolidateLocalFiles: () => Promise<number>;
   register: (username: string) => Promise<void>;
   login: (username: string, roohKey: string) => Promise<void>;
+  checkRecoveryEligibility: (identifier: string) => Promise<{
+    found: boolean;
+    vaultId: string;
+    username: string;
+    hasLocalTrust: boolean;
+    boundDriveEmail?: string;
+  }>;
+  recoverKeyOnThisBrowser: (identifier: string, confirmVaultUuid: string) => Promise<void>;
+  recoverKeyViaGoogle: (identifier: string) => Promise<void>;
+  resetKeyFromActiveSession: () => Promise<string>;
   logout: () => Promise<void>;
   updatePreferences: (next: Partial<VaultPreferences>) => Promise<void>;
 
@@ -345,6 +355,55 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [loadUserWorkspace]
   );
 
+  const checkRecoveryEligibility = useCallback(async (identifier: string) => {
+    return storageSingleton.getBrowserRecoveryInfo(identifier);
+  }, []);
+
+  const recoverKeyOnThisBrowser = useCallback(
+    async (identifier: string, confirmVaultUuid: string) => {
+      const result = await storageSingleton.resetForgottenRoohKeyOnThisBrowser(
+        identifier,
+        confirmVaultUuid
+      );
+      setHasExistingAccount(true);
+      setPendingRoohKey(result.roohKey);
+      setSessionRoohKey(result.roohKey);
+      setUser(result.user);
+      setSession(result.session);
+      await loadUserWorkspace(result.user.id);
+    },
+    [loadUserWorkspace]
+  );
+
+  const recoverKeyViaGoogle = useCallback(
+    async (identifier: string) => {
+      const info = await storageSingleton.getBrowserRecoveryInfo(identifier);
+      if (!info.found || !info.boundDriveEmail) {
+        throw new Error('No bound Google recovery account is configured for this vault.');
+      }
+      const status = await connectGoogleDrive(info.boundDriveEmail);
+      setDriveStatus(status);
+      const result = await storageSingleton.resetForgottenRoohKeyViaGoogleEmail(
+        identifier,
+        status.email
+      );
+      setHasExistingAccount(true);
+      setPendingRoohKey(result.roohKey);
+      setSessionRoohKey(result.roohKey);
+      setUser(result.user);
+      setSession(result.session);
+      await loadUserWorkspace(result.user.id);
+    },
+    [loadUserWorkspace]
+  );
+
+  const resetKeyFromActiveSession = useCallback(async (): Promise<string> => {
+    if (!user) throw new Error('Active vault session required.');
+    const newKey = await storageSingleton.resetRoohKeyFromActiveSession(user.id);
+    setSessionRoohKey(newKey);
+    return newKey;
+  }, [user]);
+
   const logout = useCallback(async () => {
     if (session) {
       await storageSingleton.logout(session.id);
@@ -593,6 +652,10 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         consolidateLocalFiles,
         register,
         login,
+        checkRecoveryEligibility,
+        recoverKeyOnThisBrowser,
+        recoverKeyViaGoogle,
+        resetKeyFromActiveSession,
         logout,
         updatePreferences,
         uploadFiles,
